@@ -1,0 +1,36 @@
+# Protection du fichier .env
+<Files .env>
+    Order allow,deny
+    Deny from all
+</Files>
+
+# Protection des scripts de cache
+<FilesMatch "^(clear-cache|check-cors).*\.php$">
+    # Optionnel : Restreindre l'accès par IP
+    # Order deny,allow
+    # Deny from all
+    # Allow from VOTRE_IP
+</FilesMatch>
+
+# Configuration Laravel standard
+<IfModule mod_rewrite.c>
+    <IfModule mod_negotiation.c>
+        Options -MultiViews -Indexes
+    </IfModule>
+
+    RewriteEngine On
+
+    # Handle Authorization Header
+    RewriteCond %{HTTP:Authorization} .
+    RewriteRule .* - [E=HTTP_AUTHORIZATION:%{HTTP:Authorization}]
+
+    # Redirect Trailing Slashes If Not A Folder...
+    RewriteCond %{REQUEST_FILENAME} !-d
+    RewriteCond %{REQUEST_URI} (.+)/$
+    RewriteRule ^ %1 [L,R=301]
+
+    # Send Requests To Front Controller...
+    RewriteCond %{REQUEST_FILENAME} !-d
+    RewriteCond %{REQUEST_FILENAME} !-f
+    RewriteRule ^ index.php [L]
+</IfModule>
