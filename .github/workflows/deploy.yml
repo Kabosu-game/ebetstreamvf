@@ -1,0 +1,84 @@
+name: Deploy Laravel App
+
+on:
+  push:
+    branches: [ "main" ]
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Setup PHP
+        uses: shivammathur/setup-php@v2
+        with:
+          php-version: '8.2'
+          extensions: mbstring, xml, ctype, iconv, intl, pdo_mysql, dom, filter, gd, json, bcmath
+          tools: composer:v2
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+
+      - name: Install PHP dependencies
+        run: composer install --no-interaction --prefer-dist --optimize-autoloader --no-dev
+
+      - name: Install Node dependencies
+        run: npm ci --prefer-offline --no-audit
+
+      - name: Build assets
+        run: npm run build
+
+      - name: Install sshpass
+        run: sudo apt-get update && sudo apt-get install -y sshpass
+
+      - name: Deploy files to VPS
+        run: |
+          sshpass -p "${{ secrets.SERVER_PASSWORD }}" rsync -avz --delete \
+            --exclude='.git' \
+            --exclude='.github' \
+            --exclude='node_modules' \
+            --exclude='.env' \
+            --exclude='storage/app/*' \
+            --exclude='storage/logs/*' \
+            --exclude='storage/framework/cache/*' \
+            --exclude='storage/framework/sessions/*' \
+            --exclude='storage/framework/views/*' \
+            --exclude='storage/*.key' \
+            --exclude='bootstrap/cache/*' \
+            --chmod=D755,F644 \
+            -e "ssh -o StrictHostKeyChecking=no" \
+            ./ "${{ secrets.SERVER_USER }}"@"${{ secrets.SERVER_IP }}":"${{ secrets.DEPLOY_PATH }}" || [ $? -eq 23 ] && echo "⚠️ Transfert terminé avec avertissements" || exit $?
+
+      - name: Run post-deployment commands
+        run: |
+          sshpass -p "${{ secrets.SERVER_PASSWORD }}" ssh -o StrictHostKeyChecking=no "${{ secrets.SERVER_USER }}"@"${{ secrets.SERVER_IP }}" << 'ENDSSH'
+            set -e
+            cd "${{ secrets.DEPLOY_PATH }}"
+            
+            # Nettoyer les caches
+            php artisan config:clear
+            php artisan cache:clear
+            php artisan view:clear
+            php artisan route:clear
+            
+            # Migrations
+            php artisan migrate --force
+            
+            # Recréer les caches
+            php artisan config:cache
+            php artisan route:cache
+            php artisan view:cache
+            php artisan optimize
+            php artisan storage:link
+            
+            # Redémarrer les services
+            sudo systemctl reload php8.2-fpm 2>/dev/null || true
+            sudo systemctl reload nginx 2>/dev/null || true
+            
+            echo "✅ Déploiement terminé avec succès"
+          ENDSSH
