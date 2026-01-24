@@ -59,26 +59,27 @@ jobs:
           sshpass -p "${{ secrets.SERVER_PASSWORD }}" ssh -o StrictHostKeyChecking=no "${{ secrets.SERVER_USER }}"@"${{ secrets.SERVER_IP }}" << 'ENDSSH'
             set -e
             cd "${{ secrets.DEPLOY_PATH }}"
-            
-            # Nettoyer les caches
-            php artisan config:clear
-            php artisan cache:clear
-            php artisan view:clear
-            php artisan route:clear
-            
-            # Migrations
-            php artisan migrate --force
-            
-            # Recréer les caches
-            php artisan config:cache
-            php artisan route:cache
-            php artisan view:cache
-            php artisan optimize
-            php artisan storage:link
-            
+
+            # Nettoyer les caches uniquement si .env existe
+            if [ -f .env ]; then
+              php artisan config:clear
+              php artisan cache:clear
+              php artisan view:clear
+              php artisan route:clear
+
+              # Recréer les caches
+              php artisan config:cache
+              php artisan route:cache
+              php artisan view:cache
+              php artisan optimize
+              php artisan storage:link
+            else
+              echo "⚠️ .env introuvable, commandes artisan ignorées."
+            fi
+
             # Redémarrer les services
             sudo systemctl reload php8.2-fpm 2>/dev/null || true
             sudo systemctl reload nginx 2>/dev/null || true
-            
+
             echo "✅ Déploiement terminé avec succès"
           ENDSSH
