@@ -32,6 +32,7 @@ class Challenge extends Model
         'live_started_at',
         'live_ended_at',
         'viewer_count',
+        'is_live_paused',
     ];
 
     protected $casts = [
@@ -47,6 +48,7 @@ class Challenge extends Model
         'viewer_count' => 'integer',
         'live_started_at' => 'datetime',
         'live_ended_at' => 'datetime',
+        'is_live_paused' => 'boolean',
     ];
 
     /**

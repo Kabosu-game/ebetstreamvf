@@ -157,13 +157,15 @@ return new class extends Migration
                 $table->text('notes')->nullable()->after('rejected_at');
             }
             
-            // Update status enum if needed
-            if (Schema::hasColumn('certification_requests', 'status')) {
-                // Check current enum values
-                $column = DB::select("SHOW COLUMNS FROM certification_requests WHERE Field = 'status'");
-                if (!empty($column) && strpos($column[0]->Type, 'under_review') === false) {
-                    // Update enum to include new values
-                    DB::statement("ALTER TABLE certification_requests MODIFY COLUMN status ENUM('pending', 'under_review', 'test_pending', 'interview_pending', 'approved', 'rejected') DEFAULT 'pending'");
+            // Update status enum if needed (MySQL only - skip for SQLite in tests)
+            if (Schema::hasColumn('certification_requests', 'status') && config('database.default') !== 'sqlite') {
+                try {
+                    $column = DB::select("SHOW COLUMNS FROM certification_requests WHERE Field = 'status'");
+                    if (!empty($column) && strpos($column[0]->Type, 'under_review') === false) {
+                        DB::statement("ALTER TABLE certification_requests MODIFY COLUMN status ENUM('pending', 'under_review', 'test_pending', 'interview_pending', 'approved', 'rejected') DEFAULT 'pending'");
+                    }
+                } catch (\Exception $e) {
+                    // Ignore if not MySQL
                 }
             }
         });

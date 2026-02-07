@@ -434,6 +434,13 @@ class ChallengeController extends Controller
             if ($challenge->creator_score !== null && $challenge->opponent_score !== null) {
                 $challenge->status = 'completed';
                 
+                // Arrêter le live si actif
+                if ($challenge->is_live) {
+                    $challenge->creator_screen_recording = false;
+                    $challenge->is_live = false;
+                    $challenge->live_ended_at = now();
+                }
+                
                 // Determine winner and distribute winnings
                 $this->distributeWinnings($challenge);
             } else {
@@ -1185,11 +1192,11 @@ class ChallengeController extends Controller
             ], 403);
         }
 
-        // Check if challenge is open, accepted or in progress
-        if (!in_array($challenge->status, ['open', 'accepted', 'in_progress'])) {
+        // Le défi doit être accepté ou en cours (démarré) pour lancer le live
+        if (!in_array($challenge->status, ['accepted', 'in_progress'])) {
             return response()->json([
                 'success' => false,
-                'message' => 'Challenge must be open, accepted or in progress to start recording'
+                'message' => 'Challenge must be accepted and started before starting live stream'
             ], 400);
         }
         
@@ -1337,8 +1344,10 @@ class ChallengeController extends Controller
                 'challenge' => $challenge,
                 'stream_url' => $challenge->stream_url,
                 'is_live' => $challenge->is_live,
+                'is_live_paused' => $challenge->is_live_paused ?? false,
                 'viewer_count' => $challenge->viewer_count,
                 'live_started_at' => $challenge->live_started_at,
+                'peer_id' => 'challenge_' . $challenge->id, // Pour WebRTC PeerJS
             ]
         ]);
     }
@@ -1376,6 +1385,83 @@ class ChallengeController extends Controller
             'data' => [
                 'viewer_count' => $challenge->viewer_count
             ]
+        ]);
+    }
+
+    /**
+     * Pause the live stream (creator only)
+     */
+    public function pauseScreenRecording(Request $request, $id)
+    {
+        $user = $request->user();
+        $challenge = Challenge::find($id);
+
+        if (!$challenge) {
+            return response()->json(['success' => false, 'message' => 'Challenge not found'], 404);
+        }
+
+        if ($challenge->creator_id !== $user->id) {
+            return response()->json(['success' => false, 'message' => 'Only the creator can pause the live stream'], 403);
+        }
+
+        if (!$challenge->is_live) {
+            return response()->json(['success' => false, 'message' => 'Live stream is not active'], 400);
+        }
+
+        $challenge->is_live_paused = true;
+        $challenge->save();
+
+        return response()->json([
+            'success' => true,
+            'message' => 'Live stream paused',
+            'data' => ['is_live_paused' => true]
+        ]);
+    }
+
+    /**
+     * Resume the live stream (creator only)
+     */
+    public function resumeScreenRecording(Request $request, $id)
+    {
+        $user = $request->user();
+        $challenge = Challenge::find($id);
+
+        if (!$challenge) {
+            return response()->json(['success' => false, 'message' => 'Challenge not found'], 404);
+        }
+
+        if ($challenge->creator_id !== $user->id) {
+            return response()->json(['success' => false, 'message' => 'Only the creator can resume the live stream'], 403);
+        }
+
+        if (!$challenge->is_live) {
+            return response()->json(['success' => false, 'message' => 'Live stream is not active'], 400);
+        }
+
+        $challenge->is_live_paused = false;
+        $challenge->save();
+
+        return response()->json([
+            'success' => true,
+            'message' => 'Live stream resumed',
+            'data' => ['is_live_paused' => false]
+        ]);
+    }
+
+    /**
+     * List live challenge streams (for /streams page)
+     */
+    public function liveChallenges(Request $request)
+    {
+        $challenges = Challenge::with(['creator', 'opponent'])
+            ->where('is_live', true)
+            ->whereIn('status', ['accepted', 'in_progress'])
+            ->orderBy('live_started_at', 'desc')
+            ->get();
+
+        return response()->json([
+            'success' => true,
+            'data' => $challenges
         ]);
     }
 }

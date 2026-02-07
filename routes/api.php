@@ -263,7 +263,7 @@ Route::get('/storage/certifications/{folder}/{filename}', function ($folder, $fi
 Route::post('/register', [RegisterController::class, 'register']);
 
 // Login (rate limited)
-Route::post('/login', [AuthController::class, 'login'])->middleware('throttle:5,1');
+Route::post('/login', [AuthController::class, 'login'])->middleware('throttle:5,1')->name('login');
 
 // Password Reset (Public)
 Route::post('/forgot-password', [AuthController::class, 'forgotPassword'])->middleware('throttle:5,1');
@@ -389,6 +389,10 @@ Route::get('/streams', [StreamController::class, 'index']);
 Route::get('/streams/{id}', [StreamController::class, 'show']);
 Route::get('/streams/{id}/chat', [StreamController::class, 'getChatMessages']);
 
+// Public challenge live stream routes (so observers can view without logging in)
+Route::get('/challenges/live/list', [ChallengeController::class, 'liveChallenges']);
+Route::get('/challenges/{id}/live', [ChallengeController::class, 'getLiveStream']);
+
     // Public event routes
 Route::get('/events', [EventController::class, 'index']);       // List events
 Route::get('/events/{id}', [EventController::class, 'show']);    // Get event
@@ -452,7 +456,7 @@ Route::middleware(['auth:sanctum', 'throttle:60,1'])->group(function () {
         Route::get('/{id}', [WithdrawalController::class, 'show']);     // Get specific withdrawal
     });
 
-    // Challenge routes
+    // Challenge routes (live/list and {id}/live are PUBLIC - defined above, outside auth group)
     Route::prefix('challenges')->group(function () {
         Route::get('/', [ChallengeController::class, 'index']);              // List challenges
         Route::post('/', [ChallengeController::class, 'store']);            // Create challenge (user)
@@ -468,7 +472,8 @@ Route::middleware(['auth:sanctum', 'throttle:60,1'])->group(function () {
         Route::delete('/{id}/stop-request', [ChallengeController::class, 'cancelStopRequest']); // Cancel stop request
         Route::post('/{id}/screen-recording/start', [ChallengeController::class, 'startScreenRecording'])->middleware('auth:api'); // Start screen recording and live (creator only)
         Route::post('/{id}/screen-recording/stop', [ChallengeController::class, 'stopScreenRecording'])->middleware('auth:api'); // Stop screen recording and live (creator only)
-        Route::get('/{id}/live', [ChallengeController::class, 'getLiveStream']); // Get live stream info (public)
+        Route::post('/{id}/screen-recording/pause', [ChallengeController::class, 'pauseScreenRecording'])->middleware('auth:api'); // Pause live (creator only)
+        Route::post('/{id}/screen-recording/resume', [ChallengeController::class, 'resumeScreenRecording'])->middleware('auth:api'); // Resume live (creator only)
         Route::post('/{id}/viewer-count', [ChallengeController::class, 'updateViewerCount']); // Update viewer count (public)
         
         // Clan challenge routes
@@ -641,26 +646,26 @@ Route::middleware(['auth:sanctum', 'throttle:60,1'])->group(function () {
                     'type' => 'welcome_bonus',
                     'conditions' => [
                         'option_1' => [
-                            'description' => 'Attendre 30 jours après l\'inscription',
+                            'description' => 'Wait 30 days after registration',
                             'completed' => $daysSinceCreation >= 30,
                             'progress' => min(100, ($daysSinceCreation / 30) * 100),
-                            'remaining' => max(0, 30 - $daysSinceCreation) . ' jours'
+                            'remaining' => round(max(0, 30 - $daysSinceCreation), 1) . ' days'
                         ],
                         'option_2' => [
-                            'description' => 'Placer 10 paris validés',
+                            'description' => 'Place 10 validated bets',
                             'completed' => $betCount >= 10,
                             'progress' => min(100, ($betCount / 10) * 100),
-                            'remaining' => max(0, 10 - $betCount) . ' paris'
+                            'remaining' => max(0, 10 - $betCount) . ' bets'
                         ]
                     ]
                 ];
                 
                 $canWithdraw = $daysSinceCreation >= 30 || $betCount >= 10;
                 if (!$canWithdraw) {
-                    $withdrawalMessage = 'Conditions non remplies : ' . ($daysSinceCreation < 30 ? 'Attendre ' . (30 - $daysSinceCreation) . ' jours' : '') . 
-                                       ($betCount < 10 ? ($daysSinceCreation < 30 ? ' OU placer ' . (10 - $betCount) . ' paris' : 'Placer ' . (10 - $betCount) . ' paris') : '');
+                    $withdrawalMessage = 'Conditions not met: ' . ($daysSinceCreation < 30 ? 'Wait ' . round(30 - $daysSinceCreation, 1) . ' days' : '') . 
+                                       ($betCount < 10 ? ($daysSinceCreation < 30 ? ' OR place ' . (10 - $betCount) . ' bets' : 'Place ' . (10 - $betCount) . ' bets') : '');
                 } else {
-                    $withdrawalMessage = 'Retrait disponible';
+                    $withdrawalMessage = 'Withdrawal available';
                 }
             } elseif ($bonusType === 'first_deposit_bonus') {
                 // Bonus premier dépôt : retirable après 1 dépôt validé + 30 jours OU après 20 paris validés
@@ -678,27 +683,27 @@ Route::middleware(['auth:sanctum', 'throttle:60,1'])->group(function () {
                     'type' => 'first_deposit_bonus',
                     'conditions' => [
                         'option_1' => [
-                            'description' => 'Avoir effectué 1 dépôt validé ET attendre 30 jours',
+                            'description' => 'Complete 1 validated deposit AND wait 30 days',
                             'completed' => $hasValidDeposit && $daysSinceCreation >= 30,
                             'progress' => min(100, (($hasValidDeposit ? 50 : 0) + (min($daysSinceCreation, 30) / 30 * 50))),
                             'deposit_completed' => $hasValidDeposit,
                             'days_completed' => $daysSinceCreation >= 30,
-                            'remaining' => (!$hasValidDeposit ? '1 dépôt validé' : '') . ($daysSinceCreation < 30 ? (!$hasValidDeposit ? ' + ' : '') . max(0, 30 - $daysSinceCreation) . ' jours' : '')
+                            'remaining' => (!$hasValidDeposit ? '1 validated deposit' : '') . ($daysSinceCreation < 30 ? (!$hasValidDeposit ? ' + ' : '') . round(max(0, 30 - $daysSinceCreation), 1) . ' days' : '')
                         ],
                         'option_2' => [
-                            'description' => 'Placer 20 paris validés',
+                            'description' => 'Place 20 validated bets',
                             'completed' => $betCount >= 20,
                             'progress' => min(100, ($betCount / 20) * 100),
-                            'remaining' => max(0, 20 - $betCount) . ' paris'
+                            'remaining' => max(0, 20 - $betCount) . ' bets'
                         ]
                     ]
                 ];
                 
                 $canWithdraw = ($hasValidDeposit && $daysSinceCreation >= 30) || $betCount >= 20;
                 if (!$canWithdraw) {
-                    $withdrawalMessage = 'Conditions non remplies';
+                    $withdrawalMessage = 'Conditions not met';
                 } else {
-                    $withdrawalMessage = 'Retrait disponible';
+                    $withdrawalMessage = 'Withdrawal available';
                 }
             } elseif ($bonusType === 'referral_bonus') {
                 // Bonus de parrainage : mêmes conditions que le bonus d'inscription (30 jours OU 10 paris validés)
@@ -711,26 +716,26 @@ Route::middleware(['auth:sanctum', 'throttle:60,1'])->group(function () {
                     'type' => 'referral_bonus',
                     'conditions' => [
                         'option_1' => [
-                            'description' => 'Attendre 30 jours après l\'inscription',
+                            'description' => 'Wait 30 days after registration',
                             'completed' => $daysSinceCreation >= 30,
                             'progress' => min(100, ($daysSinceCreation / 30) * 100),
-                            'remaining' => max(0, 30 - $daysSinceCreation) . ' jours'
+                            'remaining' => round(max(0, 30 - $daysSinceCreation), 1) . ' days'
                         ],
                         'option_2' => [
-                            'description' => 'Placer 10 paris validés',
+                            'description' => 'Place 10 validated bets',
                             'completed' => $betCount >= 10,
                             'progress' => min(100, ($betCount / 10) * 100),
-                            'remaining' => max(0, 10 - $betCount) . ' paris'
+                            'remaining' => max(0, 10 - $betCount) . ' bets'
                         ]
                     ]
                 ];
                 
                 $canWithdraw = $daysSinceCreation >= 30 || $betCount >= 10;
                 if (!$canWithdraw) {
-                    $withdrawalMessage = 'Conditions non remplies : ' . ($daysSinceCreation < 30 ? 'Attendre ' . (30 - $daysSinceCreation) . ' jours' : '') . 
-                                       ($betCount < 10 ? ($daysSinceCreation < 30 ? ' OU placer ' . (10 - $betCount) . ' paris' : 'Placer ' . (10 - $betCount) . ' paris') : '');
+                    $withdrawalMessage = 'Conditions not met: ' . ($daysSinceCreation < 30 ? 'Wait ' . round(30 - $daysSinceCreation, 1) . ' days' : '') . 
+                                       ($betCount < 10 ? ($daysSinceCreation < 30 ? ' OR place ' . (10 - $betCount) . ' bets' : 'Place ' . (10 - $betCount) . ' bets') : '');
                 } else {
-                    $withdrawalMessage = 'Retrait disponible';
+                    $withdrawalMessage = 'Withdrawal available';
                 }
             }
             
@@ -741,14 +746,14 @@ Route::middleware(['auth:sanctum', 'throttle:60,1'])->group(function () {
             $bonuses[] = [
                 'id' => $transaction->id,
                 'type' => $bonusType,
-                'type_label' => $bonusType === 'welcome_bonus' ? 'Bonus d\'inscription' : ($bonusType === 'first_deposit_bonus' ? 'Bonus premier dépôt' : 'Bonus de parrainage'),
+                'type_label' => $bonusType === 'welcome_bonus' ? 'Registration Bonus' : ($bonusType === 'first_deposit_bonus' ? 'First Deposit Bonus' : 'Referral Bonus'),
                 'amount' => $bonusAmount,
                 'status' => $transaction->status, // locked ou confirmed
                 'is_locked' => $isLocked, // Bonus non encore retiré
                 'created_at' => $createdAt->toISOString(),
                 'withdrawal_conditions' => $withdrawalConditions,
                 'can_withdraw' => $canWithdraw && $isLocked, // Ne peut retirer que si locked et conditions remplies
-                'withdrawal_message' => $isLocked ? $withdrawalMessage : 'Déjà retiré',
+                'withdrawal_message' => $isLocked ? $withdrawalMessage : 'Already withdrawn',
             ];
         }
         
