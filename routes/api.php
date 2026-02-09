@@ -47,6 +47,20 @@ Route::get('/test', function () {
     ]);
 });
 
+// Deploy check - vérifier que les routes sont à jour (GET /api/deploy-check)
+Route::get('/deploy-check', function () {
+    return response()->json([
+        'ok' => true,
+        'federations_route' => true,
+        'api_routes_file' => file_exists(base_path('routes/api.php')) ? 'exists' : 'missing',
+    ]);
+});
+
+// Public federation routes - MUST be before auth group (no login required)
+Route::get('/federations', [FederationController::class, 'index']);
+Route::get('/federations/{id}', [FederationController::class, 'show']);
+Route::get('/federations/{id}/tournaments', [FederationController::class, 'tournaments']);
+
 // Test upload route
 Route::post('/test-upload', function () {
     if (request()->hasFile('test_file')) {
@@ -407,11 +421,6 @@ Route::post('/agent-requests', [AgentRequestController::class, 'store']);
 // Public clan routes
 Route::get('/clans', [ClanController::class, 'index']);        // List clans
 Route::get('/clans/{id}', [ClanController::class, 'show']);     // Get clan details
-
-// Public federation routes (list, detail, tournaments - no auth required)
-Route::get('/federations', [FederationController::class, 'index']);
-Route::get('/federations/{id}', [FederationController::class, 'show']);
-Route::get('/federations/{id}/tournaments', [FederationController::class, 'tournaments']);
 
 // Protected routes (user must be logged in)
 Route::middleware(['auth:sanctum', 'throttle:60,1'])->group(function () {

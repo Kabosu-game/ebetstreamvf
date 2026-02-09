@@ -3,6 +3,7 @@ name: Deploy Laravel App
 on:
   push:
     branches: [ "main" ]
+  workflow_dispatch:  # Déploiement manuel possible
 
 jobs:
   deploy:
