@@ -50,7 +50,7 @@ class ProfileController extends Controller
         
         // Ajouter l'URL complète de la photo de profil
         // Utiliser l'API route pour servir les images directement
-        $baseUrl = 'http://127.0.0.1:8000/api';
+        $baseUrl = rtrim(config('app.url'), '/') . '/api';
         
         if ($profile->profile_photo) {
             // Vérifier si le fichier existe
@@ -179,7 +179,7 @@ class ProfileController extends Controller
         
         // Ajouter l'URL complète de la photo de profil
         // Utiliser l'API route pour servir les images directement
-        $baseUrl = 'http://127.0.0.1:8000/api';
+        $baseUrl = rtrim(config('app.url'), '/') . '/api';
         
         if ($profile->profile_photo) {
             // Vérifier si le fichier existe

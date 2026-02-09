@@ -408,6 +408,11 @@ Route::post('/agent-requests', [AgentRequestController::class, 'store']);
 Route::get('/clans', [ClanController::class, 'index']);        // List clans
 Route::get('/clans/{id}', [ClanController::class, 'show']);     // Get clan details
 
+// Public federation routes (list, detail, tournaments - no auth required)
+Route::get('/federations', [FederationController::class, 'index']);
+Route::get('/federations/{id}', [FederationController::class, 'show']);
+Route::get('/federations/{id}/tournaments', [FederationController::class, 'tournaments']);
+
 // Protected routes (user must be logged in)
 Route::middleware(['auth:sanctum', 'throttle:60,1'])->group(function () {
 
@@ -542,14 +547,11 @@ Route::middleware(['auth:sanctum', 'throttle:60,1'])->group(function () {
         Route::get('/{id}/my-teams', [TournamentController::class, 'getMyTeams'])->middleware('auth:api'); // Get user's teams available for registration (auth required)
     });
 
-    // Federation routes
+    // Federation routes (auth-required only; list/detail/tournaments are public, defined above)
     Route::prefix('federations')->group(function () {
-        Route::get('/', [FederationController::class, 'index']); // List federations (public)
-        Route::get('/my-federation', [FederationController::class, 'myFederation']); // Get user's federation (auth required)
-        Route::post('/', [FederationController::class, 'store']); // Create federation (auth required)
-        Route::get('/{id}', [FederationController::class, 'show']); // Get federation (public)
-        Route::put('/{id}', [FederationController::class, 'update']); // Update federation (owner only)
-        Route::get('/{id}/tournaments', [FederationController::class, 'tournaments']); // Get federation tournaments (public)
+        Route::get('/my-federation', [FederationController::class, 'myFederation']);
+        Route::post('/', [FederationController::class, 'store']);
+        Route::put('/{id}', [FederationController::class, 'update']);
     });
 
     // Ballon d'Or routes
