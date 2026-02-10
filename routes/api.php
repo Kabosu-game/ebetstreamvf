@@ -422,6 +422,17 @@ Route::post('/agent-requests', [AgentRequestController::class, 'store']);
 Route::get('/clans', [ClanController::class, 'index']);        // List clans
 Route::get('/clans/{id}', [ClanController::class, 'show']);     // Get clan details
 
+// Public ballon-dor routes (no auth required)
+Route::get('/ballon-dor/current-season', [BallonDorController::class, 'getCurrentSeason']);
+Route::get('/ballon-dor/seasons', [BallonDorController::class, 'getSeasons']);
+Route::get('/ballon-dor/nominations', [BallonDorController::class, 'getNominations']);
+Route::get('/ballon-dor/nominations/{seasonId}', [BallonDorController::class, 'getNominations']);
+Route::get('/ballon-dor/results', [BallonDorController::class, 'getResults']);
+
+// Public team-marketplace routes (no auth required)
+Route::get('/team-marketplace', [TeamMarketplaceController::class, 'index']);
+Route::get('/team-marketplace/{id}', [TeamMarketplaceController::class, 'show']);
+
 // Protected routes (user must be logged in)
 Route::middleware(['auth:sanctum', 'throttle:60,1'])->group(function () {
 
@@ -563,13 +574,12 @@ Route::middleware(['auth:sanctum', 'throttle:60,1'])->group(function () {
         Route::put('/{id}', [FederationController::class, 'update']);
     });
 
-    // Ballon d'Or routes
+    // Ballon d'Or authenticated routes (public routes defined above)
     Route::prefix('ballon-dor')->group(function () {
-        Route::get('/current-season', [BallonDorController::class, 'getCurrentSeason']); // Get current season (public)
-        Route::get('/seasons', [BallonDorController::class, 'getSeasons']); // Get all seasons (public)
-        Route::get('/nominations', [BallonDorController::class, 'getNominations']); // Get nominations (public)
-        Route::get('/nominations/{seasonId}', [BallonDorController::class, 'getNominations']); // Get nominations for season (public)
-        Route::get('/results', [BallonDorController::class, 'getResults']); // Get results (public)
+        Route::get('/my-votes', [BallonDorController::class, 'getUserVotes']);
+        Route::get('/my-votes/{seasonId}', [BallonDorController::class, 'getUserVotes']);
+        Route::get('/can-vote/{category}', [BallonDorController::class, 'canVote']);
+        Route::post('/vote', [BallonDorController::class, 'vote']);
     });
 
     // Authenticated championship routes
@@ -577,16 +587,14 @@ Route::middleware(['auth:sanctum', 'throttle:60,1'])->group(function () {
         Route::post('/{id}/register', [ChampionshipController::class, 'register']); // Register for championship (auth required)
     });
 
-    // Team Marketplace routes (public and authenticated)
+    // Team Marketplace auth-required routes (public GET / and GET /{id} defined above)
     Route::prefix('team-marketplace')->group(function () {
-        Route::get('/', [TeamMarketplaceController::class, 'index']); // List available listings (public)
-        Route::get('/{id}', [TeamMarketplaceController::class, 'show']); // Get listing details (public)
-        Route::get('/my-teams', [TeamMarketplaceController::class, 'myTeams'])->middleware('auth:api'); // Get user's teams and clans (auth required)
-        Route::post('/', [TeamMarketplaceController::class, 'store'])->middleware('auth:api'); // Create listing (auth required)
-        Route::post('/{id}/cancel', [TeamMarketplaceController::class, 'cancel'])->middleware('auth:api'); // Cancel listing (auth required)
-        Route::post('/{id}/buy', [TeamMarketplaceController::class, 'buy'])->middleware('auth:api'); // Buy team (auth required)
-        Route::post('/{id}/loan', [TeamMarketplaceController::class, 'loan'])->middleware('auth:api'); // Loan team (auth required)
-        Route::get('/my-listings', [TeamMarketplaceController::class, 'myListings'])->middleware('auth:api'); // Get user's listings (auth required)
+        Route::get('/my-teams', [TeamMarketplaceController::class, 'myTeams']);
+        Route::post('/', [TeamMarketplaceController::class, 'store']);
+        Route::post('/{id}/cancel', [TeamMarketplaceController::class, 'cancel']);
+        Route::post('/{id}/buy', [TeamMarketplaceController::class, 'buy']);
+        Route::post('/{id}/loan', [TeamMarketplaceController::class, 'loan']);
+        Route::get('/my-listings', [TeamMarketplaceController::class, 'myListings']);
     });
 
     // Wallet route
