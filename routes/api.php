@@ -46,7 +46,11 @@ Route::get('/test', function () {
         'message' => 'API is working!'
     ]);
 });
-
+// Route interne : appelée uniquement par le serveur Node.js WebSocket
+// Protégée par un token secret partagé (pas d'auth utilisateur)
+Route::middleware(['internal.token'])->group(function () {
+    Route::get('/internal/stream-key/{id}', [StreamController::class, 'internalGetStreamKey']);
+});
 // Deploy check - vérifier que les routes sont à jour (GET /api/deploy-check)
 Route::get('/deploy-check', function () {
     return response()->json([

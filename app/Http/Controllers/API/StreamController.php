@@ -38,9 +38,9 @@ class StreamController extends Controller
         }
 
         if ($request->has('search')) {
-            $query->where(function($q) use ($request) {
+            $query->where(function ($q) use ($request) {
                 $q->where('title', 'like', '%' . $request->search . '%')
-                  ->orWhere('description', 'like', '%' . $request->search . '%');
+                    ->orWhere('description', 'like', '%' . $request->search . '%');
             });
         }
 
@@ -91,7 +91,7 @@ class StreamController extends Controller
         $useTwitch = true;
         $twitchUsername = $request->input('twitch_username');
         $twitchStreamKey = $request->input('twitch_stream_key');
-        
+
         // Validate Twitch fields (always required)
         if (!$twitchUsername || !$twitchStreamKey) {
             return response()->json([
@@ -99,11 +99,11 @@ class StreamController extends Controller
                 'message' => 'Twitch username and stream key are required.'
             ], 422);
         }
-        
+
         // Utiliser les variables d'environnement pour les URLs de streaming
         $rtmpBaseUrl = env('RTMP_SERVER_URL', 'rtmp://localhost:1935');
         $hlsBaseUrl = env('HLS_SERVER_URL', 'http://localhost:8888');
-        
+
         $streamData = [
             'user_id' => $user->id,
             'title' => $request->title,
@@ -115,7 +115,7 @@ class StreamController extends Controller
             'twitch_stream_key' => $twitchStreamKey,
             'is_live' => false,
         ];
-        
+
         // Handle thumbnail upload
         if ($request->hasFile('thumbnail')) {
             $path = $request->file('thumbnail')->store('streams/thumbnails', 'public');
@@ -124,16 +124,16 @@ class StreamController extends Controller
             // Also allow an image URL (for compatibility)
             $streamData['thumbnail'] = $request->thumbnail;
         }
-        
+
         // For Twitch (always used):
         // - RTMP URL : rtmp://live.twitch.tv/app/[STREAM_KEY]
         // - HLS URL : https://www.twitch.tv/[USERNAME] (embed)
         $streamData['rtmp_url'] = 'rtmp://live.twitch.tv/app/' . $twitchStreamKey;
         $streamData['hls_url'] = 'https://www.twitch.tv/' . $twitchUsername;
-        
+
         $stream = Stream::create($streamData);
         $stream->load('user');
-        
+
         $streamData = $stream->toArray();
         $streamData['thumbnail_url'] = $stream->thumbnail_url;
 
@@ -191,7 +191,7 @@ class StreamController extends Controller
         // Always use Twitch
         $twitchUsername = $request->input('twitch_username');
         $twitchStreamKey = $request->input('twitch_stream_key');
-        
+
         // Validate Twitch fields (always required)
         if (!$twitchUsername || !$twitchStreamKey) {
             return response()->json([
@@ -199,7 +199,7 @@ class StreamController extends Controller
                 'message' => 'Twitch username and stream key are required.'
             ], 422);
         }
-        
+
         $updateData = [
             'title' => $request->input('title'),
             'description' => $request->input('description'),
@@ -208,7 +208,7 @@ class StreamController extends Controller
             'twitch_username' => $twitchUsername,
             'twitch_stream_key' => $twitchStreamKey,
         ];
-        
+
         // Handle thumbnail upload
         if ($request->hasFile('thumbnail')) {
             // Supprimer l'ancienne image si elle existe
@@ -221,12 +221,12 @@ class StreamController extends Controller
             // Also allow an image URL (for compatibility)
             $updateData['thumbnail'] = $request->thumbnail;
         }
-        
+
         // Always use Twitch
         $updateData['use_twitch'] = true;
         $updateData['rtmp_url'] = 'rtmp://live.twitch.tv/app/' . $twitchStreamKey;
         $updateData['hls_url'] = 'https://www.twitch.tv/' . $twitchUsername;
-        
+
         $stream->update($updateData);
 
         $streamData = $stream->load('user')->toArray();
@@ -366,7 +366,7 @@ class StreamController extends Controller
                 ]
             ]);
         }
-        
+
         // Pour MediaMTX/Node Media Server
         $rtmpUrl = $stream->rtmp_url;
         if (!$rtmpUrl || !str_contains($rtmpUrl, '/live/')) {
@@ -392,7 +392,7 @@ class StreamController extends Controller
     public function updateViewers(Request $request, $id)
     {
         $stream = Stream::findOrFail($id);
-        
+
         $validator = Validator::make($request->all(), [
             'viewer_count' => 'required|integer|min:0',
         ]);
@@ -558,12 +558,12 @@ class StreamController extends Controller
         }
 
         if ($request->has('search')) {
-            $query->where(function($q) use ($request) {
+            $query->where(function ($q) use ($request) {
                 $q->where('title', 'like', '%' . $request->search . '%')
-                  ->orWhere('description', 'like', '%' . $request->search . '%')
-                  ->orWhereHas('user', function($userQuery) use ($request) {
-                      $userQuery->where('username', 'like', '%' . $request->search . '%');
-                  });
+                    ->orWhere('description', 'like', '%' . $request->search . '%')
+                    ->orWhereHas('user', function ($userQuery) use ($request) {
+                        $userQuery->where('username', 'like', '%' . $request->search . '%');
+                    });
             });
         }
 
@@ -632,7 +632,12 @@ class StreamController extends Controller
         }
 
         $stream->update($request->only([
-            'title', 'description', 'category', 'game', 'thumbnail', 'is_live'
+            'title',
+            'description',
+            'category',
+            'game',
+            'thumbnail',
+            'is_live'
         ]));
 
         return response()->json([
@@ -651,10 +656,10 @@ class StreamController extends Controller
 
         // Delete associated sessions
         $stream->sessions()->delete();
-        
+
         // Delete chat messages
         $stream->chatMessages()->delete();
-        
+
         // Delete followers
         $stream->followers()->delete();
 
@@ -723,7 +728,7 @@ class StreamController extends Controller
     public function getSessions($id)
     {
         $stream = Stream::findOrFail($id);
-        
+
         $sessions = $stream->sessions()
             ->orderBy('started_at', 'desc')
             ->get();
@@ -740,7 +745,7 @@ class StreamController extends Controller
     public function adminDeleteChatMessage($id, $messageId)
     {
         $stream = Stream::findOrFail($id);
-        
+
         $chatMessage = StreamChatMessage::where('stream_id', $stream->id)
             ->findOrFail($messageId);
 
@@ -749,6 +754,23 @@ class StreamController extends Controller
         return response()->json([
             'success' => true,
             'message' => 'Message deleted successfully'
+        ]);
+    }
+
+    /**
+     * Endpoint interne : retourne la twitch_stream_key pour le serveur Node.js
+     * N'est PAS exposé aux utilisateurs normaux (middleware internal.token)
+     */
+    public function internalGetStreamKey(Request $request, $id)
+    {
+        $stream = Stream::findOrFail($id);
+
+        return response()->json([
+            'success' => true,
+            'stream_id' => $stream->id,
+            'twitch_stream_key' => $stream->twitch_stream_key,
+            'twitch_username' => $stream->twitch_username,
+            'is_live' => $stream->is_live,
         ]);
     }
 }
