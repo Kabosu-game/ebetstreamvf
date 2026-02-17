@@ -12,6 +12,7 @@ use Illuminate\Support\Facades\Validator;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Storage;
 use Illuminate\Support\Str;
+use Illuminate\Support\Facades\Log;
 
 class StreamController extends Controller
 {
@@ -247,13 +248,13 @@ class StreamController extends Controller
     $user   = $request->user();
     $stream = Stream::where('user_id', $user->id)->findOrFail($id);
 
-    \Log::info('[Stream::start] ──────────────────────────────');
-    \Log::info('[Stream::start] user_id   = ' . $user->id);
-    \Log::info('[Stream::start] stream_id = ' . $stream->id);
-    \Log::info('[Stream::start] is_live   = ' . ($stream->is_live ? 'TRUE ← PROBLÈME' : 'false'));
+    Log::info('[Stream::start] ──────────────────────────────');
+    Log::info('[Stream::start] user_id   = ' . $user->id);
+    Log::info('[Stream::start] stream_id = ' . $stream->id);
+    Log::info('[Stream::start] is_live   = ' . ($stream->is_live ? 'TRUE ← PROBLÈME' : 'false'));
 
     if ($stream->is_live) {
-        \Log::warning('[Stream::start] Refus : stream déjà live → reset forcé');
+        Log::warning('[Stream::start] Refus : stream déjà live → reset forcé');
 
         // ── AUTO-FIX : remet is_live à false puis continue ──
         $stream->update(['is_live' => false]);
@@ -279,7 +280,7 @@ class StreamController extends Controller
 
         DB::commit();
 
-        \Log::info('[Stream::start] ✅ Stream démarré, session_id = ' . $session->id);
+        Log::info('[Stream::start] ✅ Stream démarré, session_id = ' . $session->id);
 
         return response()->json([
             'success' => true,
@@ -291,7 +292,7 @@ class StreamController extends Controller
         ]);
     } catch (\Exception $e) {
         DB::rollBack();
-        \Log::error('[Stream::start] ❌ Exception : ' . $e->getMessage());
+        Log::error('[Stream::start] ❌ Exception : ' . $e->getMessage());
 
         return response()->json([
             'success' => false,
