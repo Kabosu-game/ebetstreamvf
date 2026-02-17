@@ -242,49 +242,63 @@ class StreamController extends Controller
     /**
      * Start a stream (go live)
      */
-    public function start(Request $request, $id)
-    {
-        $user = $request->user();
-        $stream = Stream::where('user_id', $user->id)->findOrFail($id);
+  public function start(Request $request, $id)
+{
+    $user   = $request->user();
+    $stream = Stream::where('user_id', $user->id)->findOrFail($id);
 
-        if ($stream->is_live) {
-            return response()->json([
-                'success' => false,
-                'message' => 'Stream is already live'
-            ], 400);
-        }
+    \Log::info('[Stream::start] ──────────────────────────────');
+    \Log::info('[Stream::start] user_id   = ' . $user->id);
+    \Log::info('[Stream::start] stream_id = ' . $stream->id);
+    \Log::info('[Stream::start] is_live   = ' . ($stream->is_live ? 'TRUE ← PROBLÈME' : 'false'));
 
-        DB::beginTransaction();
-        try {
-            $stream->update([
-                'is_live' => true,
-                'started_at' => now(),
-            ]);
+    if ($stream->is_live) {
+        \Log::warning('[Stream::start] Refus : stream déjà live → reset forcé');
 
-            $session = StreamSession::create([
-                'stream_id' => $stream->id,
-                'status' => 'live',
-                'started_at' => now(),
-            ]);
+        // ── AUTO-FIX : remet is_live à false puis continue ──
+        $stream->update(['is_live' => false]);
 
-            DB::commit();
-
-            return response()->json([
-                'success' => true,
-                'message' => 'Stream started successfully',
-                'data' => [
-                    'stream' => $stream->load('user'),
-                    'session' => $session
-                ]
-            ]);
-        } catch (\Exception $e) {
-            DB::rollBack();
-            return response()->json([
-                'success' => false,
-                'message' => 'Error starting stream: ' . $e->getMessage()
-            ], 500);
-        }
+        // Ferme les sessions ouvertes orphelines
+        StreamSession::where('stream_id', $stream->id)
+            ->where('status', 'live')
+            ->update(['status' => 'ended', 'ended_at' => now()]);
     }
+
+    DB::beginTransaction();
+    try {
+        $stream->update([
+            'is_live'    => true,
+            'started_at' => now(),
+        ]);
+
+        $session = StreamSession::create([
+            'stream_id'  => $stream->id,
+            'status'     => 'live',
+            'started_at' => now(),
+        ]);
+
+        DB::commit();
+
+        \Log::info('[Stream::start] ✅ Stream démarré, session_id = ' . $session->id);
+
+        return response()->json([
+            'success' => true,
+            'message' => 'Stream started successfully',
+            'data'    => [
+                'stream'  => $stream->load('user'),
+                'session' => $session,
+            ],
+        ]);
+    } catch (\Exception $e) {
+        DB::rollBack();
+        \Log::error('[Stream::start] ❌ Exception : ' . $e->getMessage());
+
+        return response()->json([
+            'success' => false,
+            'message' => 'Error starting stream: ' . $e->getMessage(),
+        ], 500);
+    }
+}
 
     /**
      * Stop a stream
