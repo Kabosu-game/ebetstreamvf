@@ -40,11 +40,17 @@ use App\Http\Controllers\API\AdminChampionshipController;
 use App\Http\Controllers\DepositController;
 use App\Http\Controllers\WithdrawalController;
 
+
+
 Route::get('/test', function () {
     return response()->json([
         'success' => true,
         'message' => 'API is working!'
     ]);
+});
+
+Route::middleware('auth:sanctum')->get('/token/verify', function (Request $request) {
+    return response()->json(['id' => $request->user()->id]);
 });
 // Route interne : appelée uniquement par le serveur Node.js WebSocket
 // Protégée par un token secret partagé (pas d'auth utilisateur)
@@ -298,9 +304,6 @@ Route::prefix('championships')->group(function () {
     Route::get('/{id}/standings', [ChampionshipController::class, 'standings']); // Get championship standings
 });
 
-Route::middleware('auth:sanctum')->get('/token/verify', function (Request $request) {
-    return response()->json(['id' => $request->user()->id]);
-});
 
 // Public payment methods routes (for users to see available methods)
 Route::get('/payment-methods', function (Request $request) {
