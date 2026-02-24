@@ -21,7 +21,7 @@ class StreamController extends Controller
      */
     private function wsBaseUrl(): string
     {
-        return rtrim(env('STREAM_WS_URL', 'ws://localhost:8082'), '/');
+        return rtrim(env('STREAM_WS_URL', 'wss://ebetstream.com/ws'), '/');
     }
 
     // ──────────────────────────────────────────────────────────────────────────
