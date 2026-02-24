@@ -11,13 +11,25 @@ use Illuminate\Http\Request;
 use Illuminate\Support\Facades\Validator;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Storage;
-use Illuminate\Support\Str;
 use Illuminate\Support\Facades\Log;
 
 class StreamController extends Controller
 {
     /**
-     * Liste tous les streams (live et offline)
+     * URL de base du serveur WebRTC (signaling Node.js)
+     * Défini dans .env : STREAM_WS_URL=wss://ton-domaine.com/ws
+     */
+    private function wsBaseUrl(): string
+    {
+        return rtrim(env('STREAM_WS_URL', 'ws://localhost:8082'), '/');
+    }
+
+    // ──────────────────────────────────────────────────────────────────────────
+    // PUBLIC
+    // ──────────────────────────────────────────────────────────────────────────
+
+    /**
+     * Liste tous les streams (live en premier)
      */
     public function index(Request $request)
     {
@@ -25,314 +37,223 @@ class StreamController extends Controller
             ->orderBy('is_live', 'desc')
             ->orderBy('viewer_count', 'desc');
 
-        // Filtres
-        if ($request->has('live_only') && $request->live_only) {
+        if ($request->boolean('live_only')) {
             $query->live();
         }
 
-        if ($request->has('category')) {
+        if ($request->filled('category')) {
             $query->byCategory($request->category);
         }
 
-        if ($request->has('game')) {
+        if ($request->filled('game')) {
             $query->byGame($request->game);
         }
 
-        if ($request->has('search')) {
+        if ($request->filled('search')) {
             $query->where(function ($q) use ($request) {
                 $q->where('title', 'like', '%' . $request->search . '%')
                     ->orWhere('description', 'like', '%' . $request->search . '%');
             });
         }
 
-        $streams = $query->paginate($request->get('per_page', 20));
+        $streams = $query->paginate($request->integer('per_page', 20));
 
-        return response()->json([
-            'success' => true,
-            'data' => $streams
-        ]);
+        return response()->json(['success' => true, 'data' => $streams]);
     }
 
     /**
-     * Create a new stream
+     * Créer un stream (un seul par utilisateur)
      */
     public function store(Request $request)
     {
         $user = $request->user();
 
-        $validator = Validator::make($request->all(), [
-            'title' => 'required|string|max:255',
-            'description' => 'nullable|string|max:1000',
-            'category' => 'nullable|string|max:100',
-            'game' => 'nullable|string|max:100',
-            'thumbnail' => 'nullable|image|mimes:jpeg,png,jpg,gif,webp|max:5120',
-            'use_twitch' => 'nullable|boolean',
-            'twitch_username' => 'required|string|max:100',
-            'twitch_stream_key' => 'required|string|max:255',
-        ]);
-
-        if ($validator->fails()) {
+        if (Stream::where('user_id', $user->id)->exists()) {
             return response()->json([
                 'success' => false,
-                'errors' => $validator->errors()
-            ], 422);
-        }
-
-        // Check if user already has a stream
-        $existingStream = Stream::where('user_id', $user->id)->first();
-
-        if ($existingStream) {
-            return response()->json([
-                'success' => false,
-                'message' => 'You already have a stream. Use update to modify it.'
+                'message' => 'Vous avez déjà un stream. Utilisez la mise à jour pour le modifier.',
             ], 400);
         }
 
-        // Always use Twitch
-        $useTwitch = true;
-        $twitchUsername = $request->input('twitch_username');
-        $twitchStreamKey = $request->input('twitch_stream_key');
+        $validator = Validator::make($request->all(), [
+            'title'       => 'required|string|max:255',
+            'description' => 'nullable|string|max:1000',
+            'category'    => 'nullable|string|max:100',
+            'game'        => 'nullable|string|max:100',
+            'thumbnail'   => 'nullable|image|mimes:jpeg,png,jpg,gif,webp|max:5120',
+        ]);
 
-        // Validate Twitch fields (always required)
-        if (!$twitchUsername || !$twitchStreamKey) {
-            return response()->json([
-                'success' => false,
-                'message' => 'Twitch username and stream key are required.'
-            ], 422);
+        if ($validator->fails()) {
+            return response()->json(['success' => false, 'errors' => $validator->errors()], 422);
         }
-
-        // Utiliser les variables d'environnement pour les URLs de streaming
-        $rtmpBaseUrl = env('RTMP_SERVER_URL', 'rtmp://localhost:1935');
-        $hlsBaseUrl = env('HLS_SERVER_URL', 'http://localhost:8888');
 
         $streamData = [
-            'user_id' => $user->id,
-            'title' => $request->title,
+            'user_id'     => $user->id,
+            'title'       => $request->title,
             'description' => $request->description,
-            'category' => $request->category,
-            'game' => $request->game,
-            'use_twitch' => $useTwitch,
-            'twitch_username' => $twitchUsername,
-            'twitch_stream_key' => $twitchStreamKey,
-            'is_live' => false,
+            'category'    => $request->category,
+            'game'        => $request->game,
+            'is_live'     => false,
+            'use_twitch'  => false,
         ];
 
-        // Handle thumbnail upload
         if ($request->hasFile('thumbnail')) {
-            $path = $request->file('thumbnail')->store('streams/thumbnails', 'public');
-            $streamData['thumbnail'] = $path;
-        } elseif ($request->has('thumbnail') && $request->thumbnail) {
-            // Also allow an image URL (for compatibility)
-            $streamData['thumbnail'] = $request->thumbnail;
+            $streamData['thumbnail'] = $request->file('thumbnail')
+                ->store('streams/thumbnails', 'public');
         }
-
-        // For Twitch (always used):
-        // - RTMP URL : rtmp://live.twitch.tv/app/[STREAM_KEY]
-        // - HLS URL : https://www.twitch.tv/[USERNAME] (embed)
-        $streamData['rtmp_url'] = 'rtmp://live.twitch.tv/app/' . $twitchStreamKey;
-        $streamData['hls_url'] = 'https://www.twitch.tv/' . $twitchUsername;
 
         $stream = Stream::create($streamData);
         $stream->load('user');
 
-        $streamData = $stream->toArray();
-        $streamData['thumbnail_url'] = $stream->thumbnail_url;
+        $data = $stream->toArray();
+        $data['thumbnail_url'] = $stream->thumbnail_url;
+        $data['ws_urls']       = $this->buildWsUrls($stream);
 
         return response()->json([
             'success' => true,
-            'message' => 'Stream created successfully',
-            'data' => $streamData
+            'message' => 'Stream créé avec succès',
+            'data'    => $data,
         ], 201);
     }
 
     /**
-     * Show a specific stream
+     * Afficher un stream
      */
     public function show($id)
     {
-        $stream = Stream::with(['user', 'sessions', 'followers'])
-            ->findOrFail($id);
+        $stream = Stream::with(['user', 'sessions', 'followers'])->findOrFail($id);
 
-        // Add formatted thumbnail URL
-        $streamData = $stream->toArray();
-        $streamData['thumbnail_url'] = $stream->thumbnail_url;
+        $data = $stream->toArray();
+        $data['thumbnail_url'] = $stream->thumbnail_url;
+        $data['ws_urls']       = $this->buildWsUrls($stream);
 
-        return response()->json([
-            'success' => true,
-            'data' => $streamData
-        ]);
+        return response()->json(['success' => true, 'data' => $data]);
     }
 
     /**
-     * Update a stream
+     * Mettre à jour un stream
      */
     public function update(Request $request, $id)
     {
-        $user = $request->user();
+        $user   = $request->user();
         $stream = Stream::where('user_id', $user->id)->findOrFail($id);
 
         $validator = Validator::make($request->all(), [
-            'title' => 'sometimes|string|max:255',
+            'title'       => 'sometimes|string|max:255',
             'description' => 'nullable|string|max:1000',
-            'category' => 'nullable|string|max:100',
-            'game' => 'nullable|string|max:100',
-            'thumbnail' => 'nullable|image|mimes:jpeg,png,jpg,gif,webp|max:5120',
-            'use_twitch' => 'nullable|boolean',
-            'twitch_username' => 'required|string|max:100',
-            'twitch_stream_key' => 'required|string|max:255',
+            'category'    => 'nullable|string|max:100',
+            'game'        => 'nullable|string|max:100',
+            'thumbnail'   => 'nullable|image|mimes:jpeg,png,jpg,gif,webp|max:5120',
         ]);
 
         if ($validator->fails()) {
-            return response()->json([
-                'success' => false,
-                'errors' => $validator->errors()
-            ], 422);
+            return response()->json(['success' => false, 'errors' => $validator->errors()], 422);
         }
 
-        // Always use Twitch
-        $twitchUsername = $request->input('twitch_username');
-        $twitchStreamKey = $request->input('twitch_stream_key');
+        $updateData = $request->only(['title', 'description', 'category', 'game']);
 
-        // Validate Twitch fields (always required)
-        if (!$twitchUsername || !$twitchStreamKey) {
-            return response()->json([
-                'success' => false,
-                'message' => 'Twitch username and stream key are required.'
-            ], 422);
-        }
-
-        $updateData = [
-            'title' => $request->input('title'),
-            'description' => $request->input('description'),
-            'category' => $request->input('category'),
-            'game' => $request->input('game'),
-            'twitch_username' => $twitchUsername,
-            'twitch_stream_key' => $twitchStreamKey,
-        ];
-
-        // Handle thumbnail upload
         if ($request->hasFile('thumbnail')) {
-            // Supprimer l'ancienne image si elle existe
+            // Supprimer l'ancienne miniature si elle existe en storage local
             if ($stream->thumbnail && Storage::disk('public')->exists($stream->thumbnail)) {
                 Storage::disk('public')->delete($stream->thumbnail);
             }
-            $path = $request->file('thumbnail')->store('streams/thumbnails', 'public');
-            $updateData['thumbnail'] = $path;
-        } elseif ($request->has('thumbnail') && $request->thumbnail) {
-            // Also allow an image URL (for compatibility)
-            $updateData['thumbnail'] = $request->thumbnail;
+            $updateData['thumbnail'] = $request->file('thumbnail')
+                ->store('streams/thumbnails', 'public');
         }
 
-        // Always use Twitch
-        $updateData['use_twitch'] = true;
-        $updateData['rtmp_url'] = 'rtmp://live.twitch.tv/app/' . $twitchStreamKey;
-        $updateData['hls_url'] = 'https://www.twitch.tv/' . $twitchUsername;
-
         $stream->update($updateData);
+        $stream->load('user');
 
-        $streamData = $stream->load('user')->toArray();
-        $streamData['thumbnail_url'] = $stream->thumbnail_url;
+        $data = $stream->toArray();
+        $data['thumbnail_url'] = $stream->thumbnail_url;
+        $data['ws_urls']       = $this->buildWsUrls($stream);
 
         return response()->json([
             'success' => true,
-            'message' => 'Stream updated successfully',
-            'data' => $streamData
+            'message' => 'Stream mis à jour avec succès',
+            'data'    => $data,
         ]);
     }
 
     /**
-     * Start a stream (go live)
+     * Démarrer un stream (go live)
      */
-  public function start(Request $request, $id)
-{
-    $user   = $request->user();
-    $stream = Stream::where('user_id', $user->id)->findOrFail($id);
-
-    Log::info('[Stream::start] ──────────────────────────────');
-    Log::info('[Stream::start] user_id   = ' . $user->id);
-    Log::info('[Stream::start] stream_id = ' . $stream->id);
-    Log::info('[Stream::start] is_live   = ' . ($stream->is_live ? 'TRUE ← PROBLÈME' : 'false'));
-
-    if ($stream->is_live) {
-        Log::warning('[Stream::start] Refus : stream déjà live → reset forcé');
-
-        // ── AUTO-FIX : remet is_live à false puis continue ──
-        $stream->update(['is_live' => false]);
-
-        // Ferme les sessions ouvertes orphelines
-        StreamSession::where('stream_id', $stream->id)
-            ->where('status', 'live')
-            ->update(['status' => 'ended', 'ended_at' => now()]);
-    }
-
-    DB::beginTransaction();
-    try {
-        $stream->update([
-            'is_live'    => true,
-            'started_at' => now(),
-        ]);
-
-        $session = StreamSession::create([
-            'stream_id'  => $stream->id,
-            'status'     => 'live',
-            'started_at' => now(),
-        ]);
-
-        DB::commit();
-
-        Log::info('[Stream::start] ✅ Stream démarré, session_id = ' . $session->id);
-
-        return response()->json([
-            'success' => true,
-            'message' => 'Stream started successfully',
-            'data'    => [
-                'stream'  => $stream->load('user'),
-                'session' => $session,
-            ],
-        ]);
-    } catch (\Exception $e) {
-        DB::rollBack();
-        Log::error('[Stream::start] ❌ Exception : ' . $e->getMessage());
-
-        return response()->json([
-            'success' => false,
-            'message' => 'Error starting stream: ' . $e->getMessage(),
-        ], 500);
-    }
-}
-
-    /**
-     * Stop a stream
-     */
-    public function stop(Request $request, $id)
+    public function start(Request $request, $id)
     {
-        $user = $request->user();
+        $user   = $request->user();
         $stream = Stream::where('user_id', $user->id)->findOrFail($id);
 
-        if (!$stream->is_live) {
-            return response()->json([
-                'success' => false,
-                'message' => 'Stream is not live'
-            ], 400);
+        Log::info('[Stream::start] user=' . $user->id . ' stream=' . $stream->id . ' is_live=' . ($stream->is_live ? 'TRUE' : 'false'));
+
+        // Auto-fix : si déjà marqué live (session orpheline), on remet à zéro
+        if ($stream->is_live) {
+            Log::warning('[Stream::start] Reset forcé d\'une session orpheline');
+            $stream->update(['is_live' => false]);
+            StreamSession::where('stream_id', $stream->id)
+                ->where('status', 'live')
+                ->update(['status' => 'ended', 'ended_at' => now()]);
         }
 
         DB::beginTransaction();
         try {
-            $activeSession = $stream->sessions()
+            $stream->update([
+                'is_live'    => true,
+                'started_at' => now(),
+            ]);
+
+            $session = StreamSession::create([
+                'stream_id'  => $stream->id,
+                'status'     => 'live',
+                'started_at' => now(),
+            ]);
+
+            DB::commit();
+
+            Log::info('[Stream::start] ✅ session_id=' . $session->id);
+
+            return response()->json([
+                'success' => true,
+                'message' => 'Stream démarré',
+                'data'    => [
+                    'stream'  => $stream->load('user'),
+                    'session' => $session,
+                    'ws_urls' => $this->buildWsUrls($stream),
+                ],
+            ]);
+        } catch (\Exception $e) {
+            DB::rollBack();
+            Log::error('[Stream::start] ❌ ' . $e->getMessage());
+
+            return response()->json([
+                'success' => false,
+                'message' => 'Erreur au démarrage : ' . $e->getMessage(),
+            ], 500);
+        }
+    }
+
+    /**
+     * Arrêter un stream
+     */
+    public function stop(Request $request, $id)
+    {
+        $user   = $request->user();
+        $stream = Stream::where('user_id', $user->id)->findOrFail($id);
+
+        if (!$stream->is_live) {
+            return response()->json(['success' => false, 'message' => 'Le stream n\'est pas en direct'], 400);
+        }
+
+        DB::beginTransaction();
+        try {
+            $stream->sessions()
                 ->where('status', 'live')
                 ->latest()
-                ->first();
-
-            if ($activeSession) {
-                $activeSession->update([
-                    'status' => 'ended',
-                    'ended_at' => now(),
-                ]);
-            }
+                ->first()
+                ?->update(['status' => 'ended', 'ended_at' => now()]);
 
             $stream->update([
-                'is_live' => false,
-                'ended_at' => now(),
+                'is_live'      => false,
+                'ended_at'     => now(),
                 'viewer_count' => 0,
             ]);
 
@@ -340,101 +261,76 @@ class StreamController extends Controller
 
             return response()->json([
                 'success' => true,
-                'message' => 'Stream stopped successfully',
-                'data' => $stream->load('user')
+                'message' => 'Stream arrêté',
+                'data'    => $stream->load('user'),
             ]);
         } catch (\Exception $e) {
             DB::rollBack();
+
             return response()->json([
                 'success' => false,
-                'message' => 'Error stopping stream: ' . $e->getMessage()
+                'message' => 'Erreur à l\'arrêt : ' . $e->getMessage(),
             ], 500);
         }
     }
 
     /**
-     * Get stream key for the streamer
+     * Retourne les infos de connexion WebRTC pour le streamer
+     * (token Sanctum de l'utilisateur courant + URLs WS)
      */
     public function getStreamKey(Request $request)
     {
-        $user = $request->user();
+        $user   = $request->user();
         $stream = Stream::where('user_id', $user->id)->first();
 
         if (!$stream) {
             return response()->json([
                 'success' => false,
-                'message' => 'No stream found. Please create a stream first.'
+                'message' => 'Aucun stream trouvé. Créez-en un d\'abord.',
             ], 404);
-        }
-
-        // If Twitch is used
-        if ($stream->use_twitch) {
-            return response()->json([
-                'success' => true,
-                'data' => [
-                    'stream_id' => $stream->id,
-                    'use_twitch' => true,
-                    'twitch_username' => $stream->twitch_username,
-                    'rtmp_url' => $stream->rtmp_url, // rtmp://live.twitch.tv/app/[KEY]
-                    'hls_url' => $stream->hls_url, // https://www.twitch.tv/[USERNAME]
-                    'stream_key' => $stream->twitch_stream_key, // For OBS
-                ]
-            ]);
-        }
-
-        // Pour MediaMTX/Node Media Server
-        $rtmpUrl = $stream->rtmp_url;
-        if (!$rtmpUrl || !str_contains($rtmpUrl, '/live/')) {
-            $rtmpBaseUrl = env('RTMP_SERVER_URL', 'rtmp://localhost:1935');
-            $rtmpUrl = rtrim($rtmpBaseUrl, '/') . '/' . $stream->stream_key;
         }
 
         return response()->json([
             'success' => true,
-            'data' => [
+            'data'    => [
                 'stream_id' => $stream->id,
-                'use_twitch' => false,
-                'stream_key' => $stream->stream_key,
-                'rtmp_url' => $rtmpUrl,
-                'hls_url' => $stream->hls_url,
-            ]
+                'is_live'   => $stream->is_live,
+                'ws_urls'   => $this->buildWsUrls($stream),
+                // Le token Sanctum de l'utilisateur courant est passé par le frontend
+                // via l'en-tête Authorization ; on le renvoie ici pour faciliter la
+                // connexion WebSocket depuis le composant Vue.
+                'token_hint' => 'use your Bearer token',
+            ],
         ]);
     }
 
     /**
-     * Update viewer count
+     * Mise à jour du nombre de viewers (appelé par le serveur Node.js)
      */
     public function updateViewers(Request $request, $id)
     {
         $stream = Stream::findOrFail($id);
 
         $validator = Validator::make($request->all(), [
-            'viewer_count' => 'required|integer|min:0',
+            'count' => 'required|integer|min:0',
         ]);
 
         if ($validator->fails()) {
-            return response()->json([
-                'success' => false,
-                'errors' => $validator->errors()
-            ], 422);
+            return response()->json(['success' => false, 'errors' => $validator->errors()], 422);
         }
 
-        $stream->update([
-            'viewer_count' => $request->viewer_count
-        ]);
+        $stream->update(['viewer_count' => $request->count]);
 
-        return response()->json([
-            'success' => true,
-            'data' => $stream
-        ]);
+        return response()->json(['success' => true, 'data' => ['viewer_count' => $stream->viewer_count]]);
     }
 
-    /**
-     * Suivre/Ne plus suivre un stream
-     */
+    // ──────────────────────────────────────────────────────────────────────────
+    // FOLLOW
+    // ──────────────────────────────────────────────────────────────────────────
+
     public function toggleFollow(Request $request, $id)
     {
-        $user = $request->user();
+        $user   = $request->user();
         $stream = Stream::findOrFail($id);
 
         $follower = StreamFollower::where('stream_id', $stream->id)
@@ -446,27 +342,25 @@ class StreamController extends Controller
             $stream->decrement('follower_count');
             $isFollowing = false;
         } else {
-            StreamFollower::create([
-                'stream_id' => $stream->id,
-                'user_id' => $user->id,
-            ]);
+            StreamFollower::create(['stream_id' => $stream->id, 'user_id' => $user->id]);
             $stream->increment('follower_count');
             $isFollowing = true;
         }
 
         return response()->json([
             'success' => true,
-            'message' => $isFollowing ? 'Vous suivez maintenant ce stream' : 'Vous ne suivez plus ce stream',
-            'data' => [
-                'is_following' => $isFollowing,
-                'follower_count' => $stream->fresh()->follower_count
-            ]
+            'message' => $isFollowing ? 'Vous suivez ce stream' : 'Vous ne suivez plus ce stream',
+            'data'    => [
+                'is_following'   => $isFollowing,
+                'follower_count' => $stream->fresh()->follower_count,
+            ],
         ]);
     }
 
-    /**
-     * Obtenir les messages du chat
-     */
+    // ──────────────────────────────────────────────────────────────────────────
+    // CHAT
+    // ──────────────────────────────────────────────────────────────────────────
+
     public function getChatMessages(Request $request, $id)
     {
         $stream = Stream::findOrFail($id);
@@ -475,83 +369,64 @@ class StreamController extends Controller
             ->notDeleted()
             ->with('user')
             ->orderBy('created_at', 'desc')
-            ->limit($request->get('limit', 50))
+            ->limit($request->integer('limit', 50))
             ->get()
             ->reverse()
             ->values();
 
-        return response()->json([
-            'success' => true,
-            'data' => $messages
-        ]);
+        return response()->json(['success' => true, 'data' => $messages]);
     }
 
-    /**
-     * Envoyer un message dans le chat
-     */
     public function sendChatMessage(Request $request, $id)
     {
-        $user = $request->user();
+        $user   = $request->user();
         $stream = Stream::findOrFail($id);
 
         $validator = Validator::make($request->all(), [
-            'message' => 'required|string|max:500',
+            'message'  => 'required|string|max:500',
             'reply_to' => 'nullable|exists:stream_chat_messages,id',
         ]);
 
         if ($validator->fails()) {
-            return response()->json([
-                'success' => false,
-                'errors' => $validator->errors()
-            ], 422);
+            return response()->json(['success' => false, 'errors' => $validator->errors()], 422);
         }
 
         $message = StreamChatMessage::create([
-            'stream_id' => $stream->id,
-            'user_id' => $user->id,
-            'message' => $request->message,
-            'reply_to' => $request->reply_to,
-            'is_moderator' => false, // TODO: Check permissions
-            'is_subscriber' => false, // TODO: Check subscription
+            'stream_id'    => $stream->id,
+            'user_id'      => $user->id,
+            'message'      => $request->message,
+            'reply_to'     => $request->reply_to,
+            'is_moderator' => false,
+            'is_subscriber' => false,
         ]);
 
         return response()->json([
             'success' => true,
-            'message' => 'Message sent',
-            'data' => $message->load('user')
+            'message' => 'Message envoyé',
+            'data'    => $message->load('user'),
         ], 201);
     }
 
-    /**
-     * Delete a chat message (moderation)
-     */
     public function deleteChatMessage(Request $request, $id, $messageId)
     {
-        $user = $request->user();
+        $user   = $request->user();
         $stream = Stream::findOrFail($id);
 
-        // Check that user is the stream owner or a moderator
         if ($stream->user_id !== $user->id) {
-            return response()->json([
-                'success' => false,
-                'message' => 'Unauthorized'
-            ], 403);
+            return response()->json(['success' => false, 'message' => 'Non autorisé'], 403);
         }
 
-        $chatMessage = StreamChatMessage::where('stream_id', $stream->id)
-            ->findOrFail($messageId);
+        StreamChatMessage::where('stream_id', $stream->id)
+            ->findOrFail($messageId)
+            ->update(['is_deleted' => true]);
 
-        $chatMessage->update(['is_deleted' => true]);
-
-        return response()->json([
-            'success' => true,
-            'message' => 'Message deleted'
-        ]);
+        return response()->json(['success' => true, 'message' => 'Message supprimé']);
     }
 
-    /**
-     * Liste tous les streams pour l'admin
-     */
+    // ──────────────────────────────────────────────────────────────────────────
+    // ADMIN
+    // ──────────────────────────────────────────────────────────────────────────
+
     public function adminIndex(Request $request)
     {
         $query = Stream::with(['user', 'sessions'])
@@ -559,233 +434,202 @@ class StreamController extends Controller
             ->orderBy('viewer_count', 'desc')
             ->orderBy('created_at', 'desc');
 
-        // Filtres
-        if ($request->has('live_only') && $request->live_only) {
+        if ($request->boolean('live_only')) {
             $query->live();
         }
-
-        if ($request->has('category')) {
+        if ($request->filled('category')) {
             $query->byCategory($request->category);
         }
-
-        if ($request->has('game')) {
+        if ($request->filled('game')) {
             $query->byGame($request->game);
         }
 
-        if ($request->has('search')) {
+        if ($request->filled('search')) {
             $query->where(function ($q) use ($request) {
                 $q->where('title', 'like', '%' . $request->search . '%')
                     ->orWhere('description', 'like', '%' . $request->search . '%')
-                    ->orWhereHas('user', function ($userQuery) use ($request) {
-                        $userQuery->where('username', 'like', '%' . $request->search . '%');
-                    });
+                    ->orWhereHas('user', fn($u) => $u->where('username', 'like', '%' . $request->search . '%'));
             });
         }
 
-        $streams = $query->paginate($request->get('per_page', 50));
+        $streams = $query->paginate($request->integer('per_page', 50));
 
-        // Statistiques
         $stats = [
-            'total_streams' => Stream::count(),
-            'live_streams' => Stream::where('is_live', true)->count(),
-            'total_viewers' => Stream::where('is_live', true)->sum('viewer_count'),
+            'total_streams'   => Stream::count(),
+            'live_streams'    => Stream::where('is_live', true)->count(),
+            'total_viewers'   => Stream::where('is_live', true)->sum('viewer_count'),
             'total_followers' => Stream::sum('follower_count'),
         ];
 
-        return response()->json([
-            'success' => true,
-            'data' => $streams,
-            'stats' => $stats
-        ]);
+        return response()->json(['success' => true, 'data' => $streams, 'stats' => $stats]);
     }
 
-    /**
-     * Show a specific stream for admin
-     */
     public function adminShow($id)
     {
-        $stream = Stream::with(['user', 'sessions', 'followers', 'chatMessages'])
-            ->findOrFail($id);
+        $stream = Stream::with(['user', 'sessions', 'followers', 'chatMessages'])->findOrFail($id);
 
-        // Stream statistics
         $stats = [
-            'total_sessions' => $stream->sessions()->count(),
-            'total_chat_messages' => $stream->chatMessages()->notDeleted()->count(),
-            'total_followers' => $stream->followers()->count(),
+            'total_sessions'         => $stream->sessions()->count(),
+            'total_chat_messages'    => $stream->chatMessages()->notDeleted()->count(),
+            'total_followers'        => $stream->followers()->count(),
             'total_viewers_all_time' => $stream->sessions()->sum('total_viewers'),
-            'peak_viewers' => $stream->sessions()->max('peak_viewers'),
+            'peak_viewers'           => $stream->sessions()->max('peak_viewers'),
         ];
 
-        return response()->json([
-            'success' => true,
-            'data' => $stream,
-            'stats' => $stats
-        ]);
+        $data = $stream->toArray();
+        $data['ws_urls'] = $this->buildWsUrls($stream);
+
+        return response()->json(['success' => true, 'data' => $data, 'stats' => $stats]);
     }
 
-    /**
-     * Update a stream (admin)
-     */
     public function adminUpdate(Request $request, $id)
     {
         $stream = Stream::findOrFail($id);
 
         $validator = Validator::make($request->all(), [
-            'title' => 'sometimes|string|max:255',
+            'title'       => 'sometimes|string|max:255',
             'description' => 'nullable|string|max:1000',
-            'category' => 'nullable|string|max:100',
-            'game' => 'nullable|string|max:100',
-            'thumbnail' => 'nullable|url',
-            'is_live' => 'nullable|boolean',
+            'category'    => 'nullable|string|max:100',
+            'game'        => 'nullable|string|max:100',
+            'thumbnail'   => 'nullable|url',
+            'is_live'     => 'nullable|boolean',
         ]);
 
         if ($validator->fails()) {
-            return response()->json([
-                'success' => false,
-                'errors' => $validator->errors()
-            ], 422);
+            return response()->json(['success' => false, 'errors' => $validator->errors()], 422);
         }
 
-        $stream->update($request->only([
-            'title',
-            'description',
-            'category',
-            'game',
-            'thumbnail',
-            'is_live'
-        ]));
+        $stream->update($request->only(['title', 'description', 'category', 'game', 'thumbnail', 'is_live']));
 
         return response()->json([
             'success' => true,
-            'message' => 'Stream updated successfully',
-            'data' => $stream->load('user')
+            'message' => 'Stream mis à jour',
+            'data'    => $stream->load('user'),
         ]);
     }
 
-    /**
-     * Supprimer un stream (admin)
-     */
     public function adminDestroy($id)
     {
         $stream = Stream::findOrFail($id);
 
-        // Delete associated sessions
         $stream->sessions()->delete();
-
-        // Delete chat messages
         $stream->chatMessages()->delete();
-
-        // Delete followers
         $stream->followers()->delete();
-
-        // Delete the stream
         $stream->delete();
 
-        return response()->json([
-            'success' => true,
-            'message' => 'Stream deleted successfully'
-        ]);
+        return response()->json(['success' => true, 'message' => 'Stream supprimé']);
     }
 
-    /**
-     * Force stop a stream (admin)
-     */
     public function forceStop($id)
     {
         $stream = Stream::findOrFail($id);
 
         if (!$stream->is_live) {
-            return response()->json([
-                'success' => false,
-                'message' => 'Stream is not live'
-            ], 400);
+            return response()->json(['success' => false, 'message' => 'Le stream n\'est pas en direct'], 400);
         }
 
         DB::beginTransaction();
         try {
-            $activeSession = $stream->sessions()
+            $stream->sessions()
                 ->where('status', 'live')
                 ->latest()
-                ->first();
+                ->first()
+                ?->update(['status' => 'ended', 'ended_at' => now()]);
 
-            if ($activeSession) {
-                $activeSession->update([
-                    'status' => 'ended',
-                    'ended_at' => now(),
-                ]);
-            }
-
-            $stream->update([
-                'is_live' => false,
-                'ended_at' => now(),
-                'viewer_count' => 0,
-            ]);
+            $stream->update(['is_live' => false, 'ended_at' => now(), 'viewer_count' => 0]);
 
             DB::commit();
 
-            return response()->json([
-                'success' => true,
-                'message' => 'Stream stopped successfully',
-                'data' => $stream->load('user')
-            ]);
+            return response()->json(['success' => true, 'message' => 'Stream arrêté (admin)', 'data' => $stream->load('user')]);
         } catch (\Exception $e) {
             DB::rollBack();
-            return response()->json([
-                'success' => false,
-                'message' => 'Error stopping stream: ' . $e->getMessage()
-            ], 500);
+
+            return response()->json(['success' => false, 'message' => 'Erreur : ' . $e->getMessage()], 500);
         }
     }
 
-    /**
-     * Obtenir les sessions d'un stream
-     */
     public function getSessions($id)
     {
-        $stream = Stream::findOrFail($id);
+        $stream   = Stream::findOrFail($id);
+        $sessions = $stream->sessions()->orderBy('started_at', 'desc')->get();
 
-        $sessions = $stream->sessions()
-            ->orderBy('started_at', 'desc')
-            ->get();
-
-        return response()->json([
-            'success' => true,
-            'data' => $sessions
-        ]);
+        return response()->json(['success' => true, 'data' => $sessions]);
     }
 
-    /**
-     * Supprimer un message du chat (admin - peut supprimer n'importe quel message)
-     */
     public function adminDeleteChatMessage($id, $messageId)
     {
         $stream = Stream::findOrFail($id);
 
-        $chatMessage = StreamChatMessage::where('stream_id', $stream->id)
-            ->findOrFail($messageId);
+        StreamChatMessage::where('stream_id', $stream->id)
+            ->findOrFail($messageId)
+            ->update(['is_deleted' => true]);
 
-        $chatMessage->update(['is_deleted' => true]);
-
-        return response()->json([
-            'success' => true,
-            'message' => 'Message deleted successfully'
-        ]);
+        return response()->json(['success' => true, 'message' => 'Message supprimé']);
     }
 
+    // ──────────────────────────────────────────────────────────────────────────
+    // INTERNE (appelé par Node.js uniquement, protégé par middleware internal.token)
+    // ──────────────────────────────────────────────────────────────────────────
+
     /**
-     * Endpoint interne : retourne la twitch_stream_key pour le serveur Node.js
-     * N'est PAS exposé aux utilisateurs normaux (middleware internal.token)
+     * Node.js vérifie via /api/auth/me que le token est valide.
+     * Cet endpoint permet à Node.js de récupérer les infos du stream si besoin.
      */
-    public function internalGetStreamKey(Request $request, $id)
+    public function internalGetStreamInfo(Request $request, $id)
     {
         $stream = Stream::findOrFail($id);
 
         return response()->json([
-            'success' => true,
+            'success'   => true,
             'stream_id' => $stream->id,
-            'twitch_stream_key' => $stream->twitch_stream_key,
-            'twitch_username' => $stream->twitch_username,
-            'is_live' => $stream->is_live,
+            'is_live'   => $stream->is_live,
+            'title'     => $stream->title,
         ]);
+    }
+
+    /**
+     * Mise à jour du viewer count par Node.js
+     * Route : POST /api/internal/streams/{id}/viewer-count
+     */
+    public function internalUpdateViewerCount(Request $request, $id)
+    {
+        $stream = Stream::findOrFail($id);
+
+        $validator = Validator::make($request->all(), [
+            'count' => 'required|integer|min:0',
+        ]);
+
+        if ($validator->fails()) {
+            return response()->json(['success' => false, 'errors' => $validator->errors()], 422);
+        }
+
+        $stream->update(['viewer_count' => $request->count]);
+
+        Log::info("[ViewerCount] Stream #{$id} → {$request->count} viewer(s)");
+
+        return response()->json(['success' => true]);
+    }
+
+    // ──────────────────────────────────────────────────────────────────────────
+    // HELPER PRIVÉ
+    // ──────────────────────────────────────────────────────────────────────────
+
+    /**
+     * Construit les URLs WebSocket pour streamer et viewer.
+     *
+     * Streamer → wss://domaine/ws/stream/{stream_id}?token=SANCTUM_TOKEN
+     * Viewer   → wss://domaine/ws/watch/{stream_id}?token=SANCTUM_TOKEN
+     *
+     * Le token est ajouté côté frontend (le composant Vue connaît le token
+     * de l'utilisateur connecté via le store Pinia/Vuex).
+     */
+    private function buildWsUrls(Stream $stream): array
+    {
+        $base = $this->wsBaseUrl();
+
+        return [
+            'streamer' => "{$base}/stream/{$stream->id}",
+            'viewer'   => "{$base}/watch/{$stream->id}",
+        ];
     }
 }
