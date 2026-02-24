@@ -298,6 +298,10 @@ Route::prefix('championships')->group(function () {
     Route::get('/{id}/standings', [ChampionshipController::class, 'standings']); // Get championship standings
 });
 
+Route::middleware('auth:sanctum')->get('/token/verify', function (Request $request) {
+    return response()->json(['id' => $request->user()->id]);
+});
+
 // Public payment methods routes (for users to see available methods)
 Route::get('/payment-methods', function (Request $request) {
     // Vérifier et créer la table si nécessaire
@@ -533,13 +537,13 @@ Route::middleware(['auth:sanctum', 'throttle:60,1'])->group(function () {
 
     // Stream routes
     Route::prefix('streams')->group(function () {
-       // Route::get('/', [StreamController::class, 'index']);                    // List streams
+       Route::get('/', [StreamController::class, 'index']);                    // List streams
         Route::post('/', [StreamController::class, 'store']);                    // Create stream
-     //   Route::get('/{id}', [StreamController::class, 'show']);                 // Get stream
+       Route::get('/{id}', [StreamController::class, 'show']);                 // Get stream
         Route::put('/{id}', [StreamController::class, 'update']);               // Update stream
         Route::post('/{id}/start', [StreamController::class, 'start']);         // Start stream
         Route::post('/{id}/stop', [StreamController::class, 'stop']);           // Stop stream
-     //   Route::get('/{id}/chat', [StreamController::class, 'getChatMessages']); // Get chat messages
+      Route::get('/{id}/chat', [StreamController::class, 'getChatMessages']); // Get chat messages
         Route::post('/{id}/chat', [StreamController::class, 'sendChatMessage']); // Send chat message
         Route::delete('/{id}/chat/{messageId}', [StreamController::class, 'deleteChatMessage']); // Delete chat message
         Route::post('/{id}/follow', [StreamController::class, 'toggleFollow']); // Follow/Unfollow
