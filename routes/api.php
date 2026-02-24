@@ -39,6 +39,7 @@ use App\Http\Controllers\API\ChampionshipController;
 use App\Http\Controllers\API\AdminChampionshipController;
 use App\Http\Controllers\DepositController;
 use App\Http\Controllers\WithdrawalController;
+use App\Http\Controllers\API\TokenVerifyController;
 
 
 
@@ -48,10 +49,7 @@ Route::get('/test', function () {
         'message' => 'API is working!'
     ]);
 });
-
-Route::middleware('auth:sanctum')->get('/token/verify', function (Request $request) {
-    return response()->json(['id' => $request->user()->id]);
-});
+Route::middleware('auth:sanctum')->get('/token/verify', [TokenVerifyController::class, 'verify']);
 // Route interne : appelée uniquement par le serveur Node.js WebSocket
 // Protégée par un token secret partagé (pas d'auth utilisateur)
 Route::middleware(['internal.token'])->group(function () {
