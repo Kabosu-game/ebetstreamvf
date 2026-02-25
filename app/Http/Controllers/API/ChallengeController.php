@@ -11,22 +11,21 @@ use App\Models\User;
 use App\Models\Clan;
 use App\Models\Transaction;
 use App\Models\Bet;
-use App\Models\Game;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\Validator;
 use Illuminate\Support\Facades\DB;
-use Illuminate\Support\Facades\Schema;
+use Illuminate\Support\Facades\Log;
 
 class ChallengeController extends Controller
 {
     /**
-     * Get all challenges (with filters)
+     * Liste publique des challenges avec filtres.
      */
     public function index(Request $request)
     {
         $query = Challenge::with(['creator', 'opponent', 'creatorClan', 'opponentClan']);
 
-        // Filter by type (user or clan)
+        // Filtre par type (user ou clan)
         if ($request->has('type')) {
             if ($request->type === 'clan') {
                 $query->clanChallenges();
@@ -35,54 +34,50 @@ class ChallengeController extends Controller
             }
         }
 
-        // Filter by status
+        // Filtre par statut
         if ($request->has('status')) {
             $query->where('status', $request->status);
         }
 
-        // Filter open challenges only
-        if ($request->has('open_only') && $request->open_only) {
+        // Challenges ouverts seulement
+        if ($request->boolean('open_only')) {
             $query->open();
         }
 
-        // Filter by game
-        if ($request->has('game')) {
+        // Filtre par jeu
+        if ($request->filled('game')) {
             $query->where('game', 'like', '%' . $request->game . '%');
         }
 
-        // Get user's challenges (including clan challenges)
-        if ($request->has('my_challenges') && $request->my_challenges) {
+        // Challenges de l'utilisateur connecté
+        if ($request->boolean('my_challenges')) {
             $user = $request->user();
-            $query->where(function($q) use ($user) {
+            $query->where(function ($q) use ($user) {
                 $q->forUser($user->id)
-                  ->orWhereHas('creatorClan', function($clanQuery) use ($user) {
-                      $clanQuery->whereHas('members', function($memberQuery) use ($user) {
-                          $memberQuery->where('user_id', $user->id);
-                      });
-                  })
-                  ->orWhereHas('opponentClan', function($clanQuery) use ($user) {
-                      $clanQuery->whereHas('members', function($memberQuery) use ($user) {
-                          $memberQuery->where('user_id', $user->id);
-                      });
-                  });
+                    ->orWhereHas('creatorClan', function ($clanQuery) use ($user) {
+                        $clanQuery->whereHas('members', fn($m) => $m->where('user_id', $user->id));
+                    })
+                    ->orWhereHas('opponentClan', function ($clanQuery) use ($user) {
+                        $clanQuery->whereHas('members', fn($m) => $m->where('user_id', $user->id));
+                    });
             });
         }
 
-        // Filter by clan
-        if ($request->has('clan_id')) {
+        // Filtre par clan
+        if ($request->filled('clan_id')) {
             $query->forClan($request->clan_id);
         }
 
-        $challenges = $query->orderBy('created_at', 'desc')->paginate(12);
+        $challenges = $query->orderBy('created_at', 'desc')->paginate($request->integer('per_page', 12));
 
         return response()->json([
             'success' => true,
-            'data' => $challenges
+            'data'    => $challenges,
         ]);
     }
 
     /**
-     * Get a specific challenge
+     * Détail d'un challenge.
      */
     public function show($id)
     {
@@ -91,141 +86,133 @@ class ChallengeController extends Controller
         if (!$challenge) {
             return response()->json([
                 'success' => false,
-                'message' => 'Challenge not found'
+                'message' => 'Challenge non trouvé.',
             ], 404);
         }
 
         return response()->json([
             'success' => true,
-            'data' => $challenge
+            'data'    => $challenge,
         ]);
     }
 
     /**
-     * Create a new challenge
+     * Créer un nouveau challenge (entre utilisateurs).
      */
     public function store(Request $request)
     {
         $user = $request->user();
 
         $validator = Validator::make($request->all(), [
-            'game' => 'required|string|max:255',
-            'bet_amount' => 'required|numeric|min:500|max:1000000', // Minimum 500 EBT (5$), max 1,000,000 EBT (10,000$)
-            'expires_at' => 'nullable|date|after:now',
+            'game'              => 'required|string|max:255',
+            'bet_amount'        => 'required|numeric|min:500|max:1000000',
+            'expires_at'        => 'nullable|date|after:now',
             'opponent_username' => 'nullable|string|exists:users,username',
         ]);
 
         if ($validator->fails()) {
             return response()->json([
                 'success' => false,
-                'errors' => $validator->errors()
+                'errors'  => $validator->errors(),
             ], 422);
         }
 
-        // If opponent is specified, validate it
+        // Gestion de l'adversaire direct
         $opponent = null;
-        if ($request->has('opponent_username') && $request->opponent_username) {
+        if ($request->filled('opponent_username')) {
             $opponent = User::where('username', $request->opponent_username)->first();
-            
+
             if (!$opponent) {
                 return response()->json([
                     'success' => false,
-                    'message' => 'User not found'
+                    'message' => 'Utilisateur adverse non trouvé.',
                 ], 404);
             }
 
             if ($opponent->id === $user->id) {
                 return response()->json([
                     'success' => false,
-                    'message' => 'You cannot challenge yourself'
+                    'message' => 'Vous ne pouvez pas vous défier vous-même.',
                 ], 400);
             }
 
-            // Check if opponent has sufficient balance
+            // Vérifier que l'adversaire a assez de fonds disponibles
             $opponentWallet = Wallet::where('user_id', $opponent->id)->first();
             if (!$opponentWallet) {
                 return response()->json([
                     'success' => false,
-                    'message' => 'Opponent wallet not found'
+                    'message' => 'Portefeuille de l\'adversaire introuvable.',
                 ], 404);
             }
 
-            $opponentAvailableBalance = $opponentWallet->balance - $opponentWallet->locked_balance;
-            if ($opponentAvailableBalance < $request->bet_amount) {
+            $opponentAvailable = $opponentWallet->balance - $opponentWallet->locked_balance;
+            if ($opponentAvailable < $request->bet_amount) {
                 return response()->json([
                     'success' => false,
-                    'message' => 'Opponent does not have sufficient balance'
+                    'message' => 'L\'adversaire n\'a pas assez de fonds disponibles.',
                 ], 400);
             }
         }
 
-        // Check if user has sufficient balance
+        // Vérifier le solde du créateur
         $wallet = Wallet::where('user_id', $user->id)->first();
-        
         if (!$wallet) {
             return response()->json([
                 'success' => false,
-                'message' => 'Wallet not found'
+                'message' => 'Portefeuille introuvable.',
             ], 404);
         }
 
-        $betAmount = $request->bet_amount;
-        $availableBalance = $wallet->balance - $wallet->locked_balance;
-
-        if ($availableBalance < $betAmount) {
+        $available = $wallet->balance - $wallet->locked_balance;
+        if ($available < $request->bet_amount) {
             return response()->json([
                 'success' => false,
-                'message' => 'Insufficient balance'
+                'message' => 'Solde insuffisant pour créer ce défi.',
             ], 400);
         }
 
         DB::beginTransaction();
         try {
-            // Débiter le solde et verrouiller le montant pour le créateur
-            $wallet->balance -= $betAmount;
-            $wallet->locked_balance += $betAmount;
+            // Verrouiller le montant du créateur
+            $wallet->locked_balance += $request->bet_amount;
             $wallet->save();
 
-            // If opponent is specified, debit and lock their balance too and set status to accepted
-            $status = 'open';
+            // Si adversaire direct, verrouiller aussi son montant
             if ($opponent) {
                 $opponentWallet = Wallet::where('user_id', $opponent->id)->first();
-                $opponentWallet->balance -= $betAmount;
-                $opponentWallet->locked_balance += $betAmount;
+                $opponentWallet->locked_balance += $request->bet_amount;
                 $opponentWallet->save();
-                $status = 'accepted';
             }
 
-            // Create challenge
             $challenge = Challenge::create([
-                'type' => 'user', // Type de défi entre utilisateurs
-                'creator_id' => $user->id,
-                'opponent_id' => $opponent ? $opponent->id : null,
-                'game' => $request->game,
-                'bet_amount' => $betAmount,
-                'status' => $status,
-                'expires_at' => $request->expires_at ?? now()->addDays(7),
+                'type'         => 'user',
+                'creator_id'   => $user->id,
+                'opponent_id'  => $opponent?->id,
+                'game'         => $request->game,
+                'bet_amount'   => $request->bet_amount,
+                'status'       => $opponent ? 'accepted' : 'open',
+                'expires_at'   => $request->expires_at ?? now()->addDays(7),
             ]);
 
             DB::commit();
 
             return response()->json([
                 'success' => true,
-                'message' => $opponent ? 'Direct challenge created successfully' : 'Challenge created successfully',
-                'data' => $challenge->load(['creator', 'opponent'])
+                'message' => $opponent ? 'Défi direct créé et accepté.' : 'Défi créé avec succès.',
+                'data'    => $challenge->load(['creator', 'opponent']),
             ], 201);
-
         } catch (\Exception $e) {
             DB::rollBack();
+            Log::error('[Challenge::store] ' . $e->getMessage());
             return response()->json([
                 'success' => false,
-                'message' => 'Error creating challenge: ' . $e->getMessage()
+                'message' => 'Erreur lors de la création du défi.',
             ], 500);
         }
     }
 
     /**
-     * Accept a challenge
+     * Accepter un défi ouvert.
      */
     public function accept(Request $request, $id)
     {
@@ -235,93 +222,77 @@ class ChallengeController extends Controller
         if (!$challenge) {
             return response()->json([
                 'success' => false,
-                'message' => 'Challenge not found'
+                'message' => 'Défi non trouvé.',
             ], 404);
         }
 
         if ($challenge->status !== 'open') {
             return response()->json([
                 'success' => false,
-                'message' => 'Challenge is not open'
+                'message' => 'Ce défi n\'est pas ouvert à l\'acceptation.',
             ], 400);
         }
 
         if ($challenge->creator_id === $user->id) {
             return response()->json([
                 'success' => false,
-                'message' => 'You cannot accept your own challenge'
+                'message' => 'Vous ne pouvez pas accepter votre propre défi.',
             ], 400);
         }
 
-        // Check if challenge has expired
         if ($challenge->expires_at && $challenge->expires_at < now()) {
             return response()->json([
                 'success' => false,
-                'message' => 'Challenge has expired'
+                'message' => 'Ce défi a expiré.',
             ], 400);
         }
 
-        // Check if user has sufficient balance
+        // Vérifier le solde de l'accepteur
         $wallet = Wallet::where('user_id', $user->id)->first();
-        
         if (!$wallet) {
             return response()->json([
                 'success' => false,
-                'message' => 'Wallet not found'
+                'message' => 'Portefeuille introuvable.',
             ], 404);
         }
 
-        $availableBalance = $wallet->balance - $wallet->locked_balance;
-
-        // Vérifier que l'utilisateur a au moins 1000 EBT pour pouvoir utiliser les coins
-        if ($availableBalance < 1000) {
+        $available = $wallet->balance - $wallet->locked_balance;
+        if ($available < $challenge->bet_amount) {
             return response()->json([
                 'success' => false,
-                'message' => 'You must have at least 1000 EBT (10$) to accept challenges. Your available balance is ' . number_format($availableBalance, 0) . ' EBT'
-            ], 400);
-        }
-
-        if ($availableBalance < $challenge->bet_amount) {
-            return response()->json([
-                'success' => false,
-                'message' => 'Insufficient balance. Your available balance is ' . number_format($availableBalance, 0) . ' EBT'
+                'message' => 'Solde insuffisant pour accepter ce défi.',
             ], 400);
         }
 
         DB::beginTransaction();
         try {
-            // Débiter le solde et verrouiller le montant pour l'adversaire
-            $wallet->balance -= $challenge->bet_amount;
+            // Verrouiller le montant de l'accepteur
             $wallet->locked_balance += $challenge->bet_amount;
             $wallet->save();
 
-            // Update challenge
             $challenge->opponent_id = $user->id;
             $challenge->status = 'accepted';
             $challenge->save();
-
-            // Le défi est maintenant accepté et disponible pour les paris
-            // Les autres joueurs peuvent parier via l'endpoint POST /challenges/{id}/bet
 
             DB::commit();
 
             return response()->json([
                 'success' => true,
-                'message' => 'Challenge accepted successfully',
-                'data' => $challenge->load(['creator', 'opponent'])
+                'message' => 'Défi accepté avec succès.',
+                'data'    => $challenge->load(['creator', 'opponent']),
             ]);
-
         } catch (\Exception $e) {
             DB::rollBack();
+            Log::error('[Challenge::accept] ' . $e->getMessage());
             return response()->json([
                 'success' => false,
-                'message' => 'Error accepting challenge: ' . $e->getMessage()
+                'message' => 'Erreur lors de l\'acceptation du défi.',
             ], 500);
         }
     }
 
     /**
-     * Cancel a challenge
+     * Annuler un défi (uniquement s'il est ouvert).
      */
     public function cancel(Request $request, $id)
     {
@@ -331,35 +302,33 @@ class ChallengeController extends Controller
         if (!$challenge) {
             return response()->json([
                 'success' => false,
-                'message' => 'Challenge not found'
+                'message' => 'Défi non trouvé.',
             ], 404);
         }
 
-        // Only creator can cancel, and only if challenge is open
         if ($challenge->creator_id !== $user->id) {
             return response()->json([
                 'success' => false,
-                'message' => 'Only the creator can cancel this challenge'
+                'message' => 'Seul le créateur peut annuler ce défi.',
             ], 403);
         }
 
         if ($challenge->status !== 'open') {
             return response()->json([
                 'success' => false,
-                'message' => 'Challenge cannot be cancelled'
+                'message' => 'Ce défi ne peut plus être annulé.',
             ], 400);
         }
 
         DB::beginTransaction();
         try {
-            // Unlock the bet amount
+            // Déverrouiller le montant du créateur
             $wallet = Wallet::where('user_id', $user->id)->first();
             if ($wallet) {
                 $wallet->locked_balance -= $challenge->bet_amount;
                 $wallet->save();
             }
 
-            // Update challenge status
             $challenge->status = 'cancelled';
             $challenge->save();
 
@@ -367,21 +336,21 @@ class ChallengeController extends Controller
 
             return response()->json([
                 'success' => true,
-                'message' => 'Challenge cancelled successfully',
-                'data' => $challenge
+                'message' => 'Défi annulé.',
+                'data'    => $challenge,
             ]);
-
         } catch (\Exception $e) {
             DB::rollBack();
+            Log::error('[Challenge::cancel] ' . $e->getMessage());
             return response()->json([
                 'success' => false,
-                'message' => 'Error cancelling challenge: ' . $e->getMessage()
+                'message' => 'Erreur lors de l\'annulation.',
             ], 500);
         }
     }
 
     /**
-     * Submit scores for a challenge
+     * Soumettre un score pour un défi accepté ou en cours.
      */
     public function submitScores(Request $request, $id)
     {
@@ -391,22 +360,21 @@ class ChallengeController extends Controller
         if (!$challenge) {
             return response()->json([
                 'success' => false,
-                'message' => 'Challenge not found'
+                'message' => 'Défi non trouvé.',
             ], 404);
         }
 
-        if ($challenge->status !== 'accepted' && $challenge->status !== 'in_progress') {
+        if (!in_array($challenge->status, ['accepted', 'in_progress'])) {
             return response()->json([
                 'success' => false,
-                'message' => 'Challenge is not in a valid state for score submission'
+                'message' => 'Le défi n\'est pas dans un état permettant la soumission de score.',
             ], 400);
         }
 
-        // Check if user is part of the challenge
         if ($challenge->creator_id !== $user->id && $challenge->opponent_id !== $user->id) {
             return response()->json([
                 'success' => false,
-                'message' => 'You are not part of this challenge'
+                'message' => 'Vous ne faites pas partie de ce défi.',
             ], 403);
         }
 
@@ -417,252 +385,155 @@ class ChallengeController extends Controller
         if ($validator->fails()) {
             return response()->json([
                 'success' => false,
-                'errors' => $validator->errors()
+                'errors'  => $validator->errors(),
             ], 422);
         }
 
         DB::beginTransaction();
         try {
-            // Update score based on user role
             if ($challenge->creator_id === $user->id) {
                 $challenge->creator_score = $request->score;
             } else {
                 $challenge->opponent_score = $request->score;
             }
 
-            // If both scores are set, determine winner and complete challenge
+            // Si les deux scores sont renseignés, terminer le défi
             if ($challenge->creator_score !== null && $challenge->opponent_score !== null) {
-                $challenge->status = 'completed';
-                
                 // Arrêter le live si actif
                 if ($challenge->is_live) {
-                    $challenge->creator_screen_recording = false;
                     $challenge->is_live = false;
                     $challenge->live_ended_at = now();
                 }
-                
-                // Determine winner and distribute winnings
+
+                $challenge->status = 'completed';
+                $challenge->save();
+
+                // Distribuer les gains
                 $this->distributeWinnings($challenge);
             } else {
                 $challenge->status = 'in_progress';
+                $challenge->save();
             }
-
-            $challenge->save();
 
             DB::commit();
 
             return response()->json([
                 'success' => true,
-                'message' => 'Score submitted successfully',
-                'data' => $challenge->load(['creator', 'opponent'])
+                'message' => 'Score soumis avec succès.',
+                'data'    => $challenge->load(['creator', 'opponent']),
             ]);
-
         } catch (\Exception $e) {
             DB::rollBack();
+            Log::error('[Challenge::submitScores] ' . $e->getMessage());
             return response()->json([
                 'success' => false,
-                'message' => 'Error submitting score: ' . $e->getMessage()
+                'message' => 'Erreur lors de la soumission du score.',
             ], 500);
         }
     }
 
     /**
-     * Distribute winnings after challenge completion
+     * Distribution des gains après complétion du défi.
      */
     private function distributeWinnings(Challenge $challenge)
     {
-        // Le pot total est la somme des deux mises
-        $totalPot = $challenge->bet_amount * 2; // Both players bet the same amount
-        
-        $creatorWallet = Wallet::where('user_id', $challenge->creator_id)->first();
-        $opponentWallet = Wallet::where('user_id', $challenge->opponent_id)->first();
+        $creatorWallet = Wallet::where('user_id', $challenge->creator_id)->firstOrFail();
+        $opponentWallet = Wallet::where('user_id', $challenge->opponent_id)->firstOrFail();
 
-        if (!$creatorWallet || !$opponentWallet) {
-            throw new \Exception('Wallet not found for one of the players');
-        }
-
-        // Débloquer les montants misés (remettre dans le solde disponible)
+        // Déverrouiller les montants misés
         $creatorWallet->locked_balance -= $challenge->bet_amount;
         $opponentWallet->locked_balance -= $challenge->bet_amount;
 
-        if ($creatorWallet->locked_balance < 0) {
-            $creatorWallet->locked_balance = 0;
-        }
-        if ($opponentWallet->locked_balance < 0) {
-            $opponentWallet->locked_balance = 0;
-        }
+        if ($creatorWallet->locked_balance < 0) $creatorWallet->locked_balance = 0;
+        if ($opponentWallet->locked_balance < 0) $opponentWallet->locked_balance = 0;
 
         if ($challenge->creator_score > $challenge->opponent_score) {
-            // Creator wins
-            // Le gagnant reçoit seulement le pari de l'adversaire (pas son propre pari)
-            // Son propre pari est déjà débité, donc on lui donne seulement le pari de l'adversaire
-            $creatorWallet->balance += $challenge->bet_amount; // Reçoit seulement le pari de l'adversaire
-            
-            // Le perdant perd son pari (déjà débité lors de l'acceptation, donc rien à faire)
-            // On débloque juste son montant verrouillé
-            
-            // Créer transaction pour le gagnant
-            if (Schema::hasColumn('transactions', 'meta')) {
-                $creatorWallet->user->transactions()->create([
-                    'wallet_id' => $creatorWallet->id,
-                    'type' => 'deposit',
-                    'amount' => $challenge->bet_amount, // Reçoit seulement le pari de l'adversaire
-                    'status' => 'confirmed',
-                    'provider' => 'challenge_win',
-                    'txid' => 'CHALLENGE_WIN_' . $challenge->id . '_' . $challenge->creator_id . '_' . now()->format('YmdHis'),
-                    'meta' => json_encode(['challenge_id' => $challenge->id, 'opponent_id' => $challenge->opponent_id])
-                ]);
-            } else {
-                $creatorWallet->user->transactions()->create([
-                    'wallet_id' => $creatorWallet->id,
-                    'type' => 'deposit',
-                    'amount' => $challenge->bet_amount, // Reçoit seulement le pari de l'adversaire
-                    'status' => 'confirmed',
-                    'provider' => 'challenge_win',
-                    'txid' => 'CHALLENGE_WIN_' . $challenge->id . '_' . $challenge->creator_id . '_' . now()->format('YmdHis'),
-                ]);
-            }
+            // Le créateur gagne : il reçoit la mise de l'adversaire
+            $creatorWallet->balance += $challenge->bet_amount;
 
-            // Créer transaction pour le perdant (déjà débité lors de l'acceptation)
-            if (Schema::hasColumn('transactions', 'meta')) {
-                $opponentWallet->user->transactions()->create([
-                    'wallet_id' => $opponentWallet->id,
-                    'type' => 'bet',
-                    'amount' => $challenge->bet_amount,
-                    'status' => 'confirmed',
-                    'provider' => 'challenge_loss',
-                    'txid' => 'CHALLENGE_LOSS_' . $challenge->id . '_' . $challenge->opponent_id . '_' . now()->format('YmdHis'),
-                    'meta' => json_encode(['challenge_id' => $challenge->id, 'winner_id' => $challenge->creator_id])
-                ]);
-            } else {
-                $opponentWallet->user->transactions()->create([
-                    'wallet_id' => $opponentWallet->id,
-                    'type' => 'bet',
-                    'amount' => $challenge->bet_amount,
-                    'status' => 'confirmed',
-                    'provider' => 'challenge_loss',
-                    'txid' => 'CHALLENGE_LOSS_' . $challenge->id . '_' . $challenge->opponent_id . '_' . now()->format('YmdHis'),
-                ]);
-            }
+            // Transactions
+            $creatorWallet->user->transactions()->create([
+                'wallet_id' => $creatorWallet->id,
+                'type'      => 'deposit',
+                'amount'    => $challenge->bet_amount,
+                'status'    => 'confirmed',
+                'provider'  => 'challenge_win',
+                'txid'      => 'CHALLENGE_WIN_' . $challenge->id . '_' . $challenge->creator_id . '_' . now()->format('YmdHis'),
+                'meta'      => json_encode(['challenge_id' => $challenge->id, 'opponent_id' => $challenge->opponent_id]),
+            ]);
 
+            $opponentWallet->user->transactions()->create([
+                'wallet_id' => $opponentWallet->id,
+                'type'      => 'bet',
+                'amount'    => $challenge->bet_amount,
+                'status'    => 'confirmed',
+                'provider'  => 'challenge_loss',
+                'txid'      => 'CHALLENGE_LOSS_' . $challenge->id . '_' . $challenge->opponent_id . '_' . now()->format('YmdHis'),
+                'meta'      => json_encode(['challenge_id' => $challenge->id, 'winner_id' => $challenge->creator_id]),
+            ]);
         } elseif ($challenge->opponent_score > $challenge->creator_score) {
-            // Opponent wins
-            // Le gagnant reçoit seulement le pari de l'adversaire (pas son propre pari)
-            $opponentWallet->balance += $challenge->bet_amount; // Reçoit seulement le pari de l'adversaire
-            
-            // Le perdant perd son pari (déjà débité lors de l'acceptation)
-            
-            // Créer transaction pour le gagnant
-            if (Schema::hasColumn('transactions', 'meta')) {
-                $opponentWallet->user->transactions()->create([
-                    'wallet_id' => $opponentWallet->id,
-                    'type' => 'deposit',
-                    'amount' => $challenge->bet_amount, // Reçoit seulement le pari de l'adversaire
-                    'status' => 'confirmed',
-                    'provider' => 'challenge_win',
-                    'txid' => 'CHALLENGE_WIN_' . $challenge->id . '_' . $challenge->opponent_id . '_' . now()->format('YmdHis'),
-                    'meta' => json_encode(['challenge_id' => $challenge->id, 'opponent_id' => $challenge->creator_id])
-                ]);
-            } else {
-                $opponentWallet->user->transactions()->create([
-                    'wallet_id' => $opponentWallet->id,
-                    'type' => 'deposit',
-                    'amount' => $challenge->bet_amount, // Reçoit seulement le pari de l'adversaire
-                    'status' => 'confirmed',
-                    'provider' => 'challenge_win',
-                    'txid' => 'CHALLENGE_WIN_' . $challenge->id . '_' . $challenge->opponent_id . '_' . now()->format('YmdHis'),
-                ]);
-            }
+            // L'adversaire gagne
+            $opponentWallet->balance += $challenge->bet_amount;
 
-            // Créer transaction pour le perdant (déjà débité lors de l'acceptation)
-            if (Schema::hasColumn('transactions', 'meta')) {
-                $creatorWallet->user->transactions()->create([
-                    'wallet_id' => $creatorWallet->id,
-                    'type' => 'bet',
-                    'amount' => $challenge->bet_amount,
-                    'status' => 'confirmed',
-                    'provider' => 'challenge_loss',
-                    'txid' => 'CHALLENGE_LOSS_' . $challenge->id . '_' . $challenge->creator_id . '_' . now()->format('YmdHis'),
-                    'meta' => json_encode(['challenge_id' => $challenge->id, 'winner_id' => $challenge->opponent_id])
-                ]);
-            } else {
-                $creatorWallet->user->transactions()->create([
-                    'wallet_id' => $creatorWallet->id,
-                    'type' => 'bet',
-                    'amount' => $challenge->bet_amount,
-                    'status' => 'confirmed',
-                    'provider' => 'challenge_loss',
-                    'txid' => 'CHALLENGE_LOSS_' . $challenge->id . '_' . $challenge->creator_id . '_' . now()->format('YmdHis'),
-                ]);
-            }
+            $opponentWallet->user->transactions()->create([
+                'wallet_id' => $opponentWallet->id,
+                'type'      => 'deposit',
+                'amount'    => $challenge->bet_amount,
+                'status'    => 'confirmed',
+                'provider'  => 'challenge_win',
+                'txid'      => 'CHALLENGE_WIN_' . $challenge->id . '_' . $challenge->opponent_id . '_' . now()->format('YmdHis'),
+                'meta'      => json_encode(['challenge_id' => $challenge->id, 'opponent_id' => $challenge->creator_id]),
+            ]);
 
+            $creatorWallet->user->transactions()->create([
+                'wallet_id' => $creatorWallet->id,
+                'type'      => 'bet',
+                'amount'    => $challenge->bet_amount,
+                'status'    => 'confirmed',
+                'provider'  => 'challenge_loss',
+                'txid'      => 'CHALLENGE_LOSS_' . $challenge->id . '_' . $challenge->creator_id . '_' . now()->format('YmdHis'),
+                'meta'      => json_encode(['challenge_id' => $challenge->id, 'winner_id' => $challenge->opponent_id]),
+            ]);
         } else {
-            // Draw - refund both players
+            // Égalité : remboursement des deux
             $creatorWallet->balance += $challenge->bet_amount;
             $opponentWallet->balance += $challenge->bet_amount;
 
-            // Créer transactions pour les remboursements
-            if (Schema::hasColumn('transactions', 'meta')) {
-                $creatorWallet->user->transactions()->create([
-                    'wallet_id' => $creatorWallet->id,
-                    'type' => 'deposit',
-                    'amount' => $challenge->bet_amount,
-                    'status' => 'confirmed',
-                    'provider' => 'challenge_draw',
-                    'txid' => 'CHALLENGE_DRAW_' . $challenge->id . '_' . $challenge->creator_id . '_' . now()->format('YmdHis'),
-                    'meta' => json_encode(['challenge_id' => $challenge->id, 'result' => 'draw'])
-                ]);
+            $creatorWallet->user->transactions()->create([
+                'wallet_id' => $creatorWallet->id,
+                'type'      => 'deposit',
+                'amount'    => $challenge->bet_amount,
+                'status'    => 'confirmed',
+                'provider'  => 'challenge_draw',
+                'txid'      => 'CHALLENGE_DRAW_' . $challenge->id . '_' . $challenge->creator_id . '_' . now()->format('YmdHis'),
+                'meta'      => json_encode(['challenge_id' => $challenge->id, 'result' => 'draw']),
+            ]);
 
-                $opponentWallet->user->transactions()->create([
-                    'wallet_id' => $opponentWallet->id,
-                    'type' => 'deposit',
-                    'amount' => $challenge->bet_amount,
-                    'status' => 'confirmed',
-                    'provider' => 'challenge_draw',
-                    'txid' => 'CHALLENGE_DRAW_' . $challenge->id . '_' . $challenge->opponent_id . '_' . now()->format('YmdHis'),
-                    'meta' => json_encode(['challenge_id' => $challenge->id, 'result' => 'draw'])
-                ]);
-            } else {
-                $creatorWallet->user->transactions()->create([
-                    'wallet_id' => $creatorWallet->id,
-                    'type' => 'deposit',
-                    'amount' => $challenge->bet_amount,
-                    'status' => 'confirmed',
-                    'provider' => 'challenge_draw',
-                    'txid' => 'CHALLENGE_DRAW_' . $challenge->id . '_' . $challenge->creator_id . '_' . now()->format('YmdHis'),
-                ]);
-
-                $opponentWallet->user->transactions()->create([
-                    'wallet_id' => $opponentWallet->id,
-                    'type' => 'deposit',
-                    'amount' => $challenge->bet_amount,
-                    'status' => 'confirmed',
-                    'provider' => 'challenge_draw',
-                    'txid' => 'CHALLENGE_DRAW_' . $challenge->id . '_' . $challenge->opponent_id . '_' . now()->format('YmdHis'),
-                ]);
-            }
+            $opponentWallet->user->transactions()->create([
+                'wallet_id' => $opponentWallet->id,
+                'type'      => 'deposit',
+                'amount'    => $challenge->bet_amount,
+                'status'    => 'confirmed',
+                'provider'  => 'challenge_draw',
+                'txid'      => 'CHALLENGE_DRAW_' . $challenge->id . '_' . $challenge->opponent_id . '_' . now()->format('YmdHis'),
+                'meta'      => json_encode(['challenge_id' => $challenge->id, 'result' => 'draw']),
+            ]);
         }
 
         $creatorWallet->save();
         $opponentWallet->save();
 
-        // Résoudre les paris sur ce défi
+        // Résoudre les paris tiers éventuels
         $this->resolveChallengeBets($challenge);
     }
 
     /**
-     * Résoudre les paris sur un défi terminé
+     * Résolution des paris placés sur le défi.
      */
     private function resolveChallengeBets(Challenge $challenge)
     {
-        // Déterminer le gagnant
-        $winner = null;
-        if ($challenge->creator_score > $challenge->opponent_score) {
-            $winner = 'creator_win';
-        } elseif ($challenge->opponent_score > $challenge->creator_score) {
-            $winner = 'opponent_win';
-        } else {
-            // Match nul - rembourser tous les paris
+        if ($challenge->creator_score == $challenge->opponent_score) {
+            // Égalité : remboursement de tous les paris
             $bets = Bet::where('challenge_id', $challenge->id)
                 ->where('status', 'pending')
                 ->get();
@@ -679,7 +550,8 @@ class ChallengeController extends Controller
             return;
         }
 
-        // Récupérer tous les paris en attente sur ce défi
+        $winner = $challenge->creator_score > $challenge->opponent_score ? 'creator_win' : 'opponent_win';
+
         $bets = Bet::where('challenge_id', $challenge->id)
             ->where('status', 'pending')
             ->with('user')
@@ -687,38 +559,33 @@ class ChallengeController extends Controller
 
         foreach ($bets as $bet) {
             $wallet = Wallet::where('user_id', $bet->user_id)->first();
-            
-            if (!$wallet) {
-                continue;
-            }
+            if (!$wallet) continue;
 
             if ($bet->bet_type === $winner) {
-                // Pari gagnant - verser les gains
+                // Gain
                 $wallet->balance += $bet->potential_win;
                 $wallet->save();
                 $bet->status = 'won';
             } else {
-                // Pari perdant
                 $bet->status = 'lost';
             }
-            
             $bet->save();
         }
     }
 
-    /**
-     * Get messages for a challenge (only creator and opponent can see)
-     */
+    // ──────────────────────────────────────────────────────────────────────────
+    // CHAT
+    // ──────────────────────────────────────────────────────────────────────────
+
     public function getMessages(Request $request, $id)
     {
         $user = $request->user();
         $challenge = Challenge::findOrFail($id);
 
-        // Check if user is creator or opponent
         if ($challenge->creator_id !== $user->id && $challenge->opponent_id !== $user->id) {
             return response()->json([
                 'success' => false,
-                'message' => 'Unauthorized. Only the creator and opponent can view messages.'
+                'message' => 'Accès non autorisé.',
             ], 403);
         }
 
@@ -730,31 +597,26 @@ class ChallengeController extends Controller
 
         return response()->json([
             'success' => true,
-            'data' => $messages
+            'data'    => $messages,
         ]);
     }
 
-    /**
-     * Send a message to challenge chat (only creator and opponent can send)
-     */
     public function sendMessage(Request $request, $id)
     {
         $user = $request->user();
         $challenge = Challenge::findOrFail($id);
 
-        // Check if user is creator or opponent
         if ($challenge->creator_id !== $user->id && $challenge->opponent_id !== $user->id) {
             return response()->json([
                 'success' => false,
-                'message' => 'Unauthorized. Only the creator and opponent can send messages.'
+                'message' => 'Seuls le créateur et l\'adversaire peuvent envoyer des messages.',
             ], 403);
         }
 
-        // Check if challenge has been accepted (opponent must exist)
         if (!$challenge->opponent_id) {
             return response()->json([
                 'success' => false,
-                'message' => 'Challenge must be accepted before messages can be sent.'
+                'message' => 'Le défi doit être accepté avant de pouvoir chatter.',
             ], 400);
         }
 
@@ -765,47 +627,35 @@ class ChallengeController extends Controller
         if ($validator->fails()) {
             return response()->json([
                 'success' => false,
-                'errors' => $validator->errors()
+                'errors'  => $validator->errors(),
             ], 422);
         }
 
         $message = ChallengeMessage::create([
             'challenge_id' => $challenge->id,
-            'user_id' => $user->id,
-            'message' => $request->message,
+            'user_id'      => $user->id,
+            'message'      => $request->message,
         ]);
 
         return response()->json([
             'success' => true,
-            'message' => 'Message sent successfully',
-            'data' => $message->load('user:id,username')
+            'message' => 'Message envoyé.',
+            'data'    => $message->load('user:id,username'),
         ], 201);
     }
 
-    /**
-     * Delete a message (only the sender can delete)
-     */
     public function deleteMessage(Request $request, $id, $messageId)
     {
         $user = $request->user();
         $challenge = Challenge::findOrFail($id);
 
-        // Check if user is creator or opponent
-        if ($challenge->creator_id !== $user->id && $challenge->opponent_id !== $user->id) {
-            return response()->json([
-                'success' => false,
-                'message' => 'Unauthorized.'
-            ], 403);
-        }
-
         $message = ChallengeMessage::where('challenge_id', $challenge->id)
             ->findOrFail($messageId);
 
-        // Only the sender can delete their message
         if ($message->user_id !== $user->id) {
             return response()->json([
                 'success' => false,
-                'message' => 'You can only delete your own messages.'
+                'message' => 'Vous ne pouvez supprimer que vos propres messages.',
             ], 403);
         }
 
@@ -813,97 +663,88 @@ class ChallengeController extends Controller
 
         return response()->json([
             'success' => true,
-            'message' => 'Message deleted successfully'
+            'message' => 'Message supprimé.',
         ]);
     }
 
-    /**
-     * Request to stop a challenge (initiate stop request)
-     */
+    // ──────────────────────────────────────────────────────────────────────────
+    // DEMANDE D'ARRÊT (STOP REQUEST)
+    // ──────────────────────────────────────────────────────────────────────────
+
     public function requestStop(Request $request, $id)
     {
         $user = $request->user();
         $challenge = Challenge::findOrFail($id);
 
-        // Check if user is creator or opponent
         if ($challenge->creator_id !== $user->id && $challenge->opponent_id !== $user->id) {
             return response()->json([
                 'success' => false,
-                'message' => 'Unauthorized. Only the creator and opponent can request to stop the challenge.'
+                'message' => 'Seuls les participants peuvent demander l\'arrêt.',
             ], 403);
         }
 
-        // Check if challenge is in a valid state
         if (!in_array($challenge->status, ['accepted', 'in_progress'])) {
             return response()->json([
                 'success' => false,
-                'message' => 'Challenge must be accepted or in progress to request stop.'
+                'message' => 'Le défi doit être accepté ou en cours.',
             ], 400);
         }
 
-        // Check if opponent exists
         if (!$challenge->opponent_id) {
             return response()->json([
                 'success' => false,
-                'message' => 'Challenge must be accepted before requesting stop.'
+                'message' => 'Le défi doit avoir un adversaire.',
             ], 400);
         }
 
-        // Check if there's already a stop request
-        $existingRequest = ChallengeStopRequest::where('challenge_id', $challenge->id)
+        $existing = ChallengeStopRequest::where('challenge_id', $challenge->id)
             ->whereIn('status', ['pending', 'confirmed'])
             ->first();
 
-        if ($existingRequest) {
-            // If the other player already requested, confirm it
-            if ($existingRequest->initiator_id !== $user->id) {
-                $existingRequest->update([
+        if ($existing) {
+            if ($existing->initiator_id !== $user->id) {
+                // L'autre joueur confirme
+                $existing->update([
                     'confirmer_id' => $user->id,
-                    'status' => 'confirmed',
+                    'status'       => 'confirmed',
                     'confirmed_at' => now(),
                 ]);
-
                 return response()->json([
                     'success' => true,
-                    'message' => 'Stop request confirmed. Waiting for admin approval.',
-                    'data' => $existingRequest->load(['initiator:id,username', 'confirmer:id,username'])
+                    'message' => 'Demande d\'arrêt confirmée. En attente de validation admin.',
+                    'data'    => $existing->load(['initiator:id,username', 'confirmer:id,username']),
                 ]);
             } else {
                 return response()->json([
                     'success' => false,
-                    'message' => 'You have already requested to stop this challenge. Waiting for opponent confirmation.'
+                    'message' => 'Vous avez déjà fait une demande. Attendez la confirmation de l\'adversaire.',
                 ], 400);
             }
         }
 
-        // Create new stop request
         $stopRequest = ChallengeStopRequest::create([
             'challenge_id' => $challenge->id,
             'initiator_id' => $user->id,
-            'status' => 'pending',
-            'reason' => $request->reason ?? null,
+            'status'       => 'pending',
+            'reason'       => $request->reason,
         ]);
 
         return response()->json([
             'success' => true,
-            'message' => 'Stop request created. Waiting for opponent confirmation.',
-            'data' => $stopRequest->load('initiator:id,username')
+            'message' => 'Demande d\'arrêt créée. En attente de confirmation de l\'adversaire.',
+            'data'    => $stopRequest->load('initiator:id,username'),
         ], 201);
     }
 
-    /**
-     * Get stop request status for a challenge
-     */
     public function getStopRequest(Request $request, $id)
     {
         $user = $request->user();
         $challenge = Challenge::findOrFail($id);
 
-        // Check if user is creator or opponent
         if ($challenge->creator_id !== $user->id && $challenge->opponent_id !== $user->id) {
             return response()->json([
                 'success' => false,
-                'message' => 'Unauthorized.'
+                'message' => 'Accès non autorisé.',
             ], 403);
         }
 
@@ -913,13 +754,10 @@ class ChallengeController extends Controller
 
         return response()->json([
             'success' => true,
-            'data' => $stopRequest
+            'data'    => $stopRequest,
         ]);
     }
 
-    /**
-     * Cancel stop request (only the initiator can cancel if not confirmed)
-     */
     public function cancelStopRequest(Request $request, $id)
     {
         $user = $request->user();
@@ -932,14 +770,14 @@ class ChallengeController extends Controller
         if (!$stopRequest) {
             return response()->json([
                 'success' => false,
-                'message' => 'No pending stop request found.'
+                'message' => 'Aucune demande en attente.',
             ], 404);
         }
 
         if ($stopRequest->initiator_id !== $user->id) {
             return response()->json([
                 'success' => false,
-                'message' => 'Only the initiator can cancel the stop request.'
+                'message' => 'Seul l\'initiateur peut annuler la demande.',
             ], 403);
         }
 
@@ -947,153 +785,116 @@ class ChallengeController extends Controller
 
         return response()->json([
             'success' => true,
-            'message' => 'Stop request cancelled successfully.'
+            'message' => 'Demande d\'arrêt annulée.',
         ]);
     }
 
-    /**
-     * Create a clan challenge (between clans)
-     */
+    // ──────────────────────────────────────────────────────────────────────────
+    // DÉFIS ENTRE CLANS
+    // ──────────────────────────────────────────────────────────────────────────
+
     public function storeClanChallenge(Request $request)
     {
         $user = $request->user();
 
         $validator = Validator::make($request->all(), [
-            'game' => 'required|string|max:255',
-            'bet_amount' => 'required|numeric|min:500|max:1000000', // Minimum 500 EBT (5$), max 1,000,000 EBT (10,000$)
-            'expires_at' => 'nullable|date|after:now',
+            'game'             => 'required|string|max:255',
+            'bet_amount'       => 'required|numeric|min:500|max:1000000',
+            'expires_at'       => 'nullable|date|after:now',
             'opponent_clan_id' => 'nullable|integer|exists:clans,id',
         ]);
 
         if ($validator->fails()) {
             return response()->json([
                 'success' => false,
-                'errors' => $validator->errors()
+                'errors'  => $validator->errors(),
             ], 422);
         }
 
-        // Vérifier que l'utilisateur est membre d'un clan
-        $creatorClan = Clan::whereHas('members', function($query) use ($user) {
-            $query->where('user_id', $user->id);
-        })->first();
-
+        $creatorClan = Clan::whereHas('members', fn($q) => $q->where('user_id', $user->id))->first();
         if (!$creatorClan) {
             return response()->json([
                 'success' => false,
-                'message' => 'You must be a member of a clan to create a clan challenge'
+                'message' => 'Vous devez être membre d\'un clan pour créer un défi de clan.',
             ], 400);
         }
 
-        // Si un clan adversaire est spécifié, valider
         $opponentClan = null;
-        if ($request->has('opponent_clan_id') && $request->opponent_clan_id) {
+        if ($request->filled('opponent_clan_id')) {
             $opponentClan = Clan::find($request->opponent_clan_id);
-            
-            if (!$opponentClan) {
-                return response()->json([
-                    'success' => false,
-                    'message' => 'Opponent clan not found'
-                ], 404);
-            }
-
             if ($opponentClan->id === $creatorClan->id) {
                 return response()->json([
                     'success' => false,
-                    'message' => 'You cannot challenge your own clan'
+                    'message' => 'Vous ne pouvez pas défier votre propre clan.',
                 ], 400);
             }
         }
 
-        // Vérifier que l'utilisateur a suffisamment de balance
-        $wallet = Wallet::where('user_id', $user->id)->first();
-        
-        if (!$wallet) {
+        $wallet = Wallet::where('user_id', $user->id)->firstOrFail();
+        $available = $wallet->balance - $wallet->locked_balance;
+        if ($available < $request->bet_amount) {
             return response()->json([
                 'success' => false,
-                'message' => 'Wallet not found'
-            ], 404);
-        }
-
-        $betAmount = $request->bet_amount;
-        $availableBalance = $wallet->balance - $wallet->locked_balance;
-
-        if ($availableBalance < $betAmount) {
-            return response()->json([
-                'success' => false,
-                'message' => 'Insufficient balance'
+                'message' => 'Solde insuffisant.',
             ], 400);
         }
 
         DB::beginTransaction();
         try {
-            // Verrouiller le montant pour le créateur
-            $wallet->locked_balance += $betAmount;
+            $wallet->locked_balance += $request->bet_amount;
             $wallet->save();
 
-            // Si un clan adversaire est spécifié, le défi est automatiquement accepté
-            $status = 'open';
-            if ($opponentClan) {
-                // Optionnel: verrouiller aussi la balance du leader du clan adversaire
-                // Pour l'instant, on accepte automatiquement le défi
-                $status = 'accepted';
-            }
-
-            // Créer le défi entre clans
             $challenge = Challenge::create([
-                'type' => 'clan',
-                'creator_id' => $user->id, // L'utilisateur qui crée le défi
+                'type'            => 'clan',
+                'creator_id'      => $user->id,
                 'creator_clan_id' => $creatorClan->id,
-                'opponent_clan_id' => $opponentClan ? $opponentClan->id : null,
-                'game' => $request->game,
-                'bet_amount' => $betAmount,
-                'status' => $status,
-                'expires_at' => $request->expires_at ?? now()->addDays(7),
+                'opponent_clan_id' => $opponentClan?->id,
+                'game'            => $request->game,
+                'bet_amount'      => $request->bet_amount,
+                'status'          => $opponentClan ? 'accepted' : 'open',
+                'expires_at'      => $request->expires_at ?? now()->addDays(7),
             ]);
 
             DB::commit();
 
             return response()->json([
                 'success' => true,
-                'message' => $opponentClan ? 'Clan challenge created and accepted successfully' : 'Clan challenge created successfully',
-                'data' => $challenge->load(['creator', 'creatorClan', 'opponentClan'])
+                'message' => $opponentClan ? 'Défi de clan créé et accepté.' : 'Défi de clan créé.',
+                'data'    => $challenge->load(['creator', 'creatorClan', 'opponentClan']),
             ], 201);
-
         } catch (\Exception $e) {
             DB::rollBack();
+            Log::error('[Challenge::storeClanChallenge] ' . $e->getMessage());
             return response()->json([
                 'success' => false,
-                'message' => 'Error creating clan challenge: ' . $e->getMessage()
+                'message' => 'Erreur lors de la création du défi de clan.',
             ], 500);
         }
     }
 
-    /**
-     * Accept a clan challenge (by a member of the challenged clan)
-     */
     public function acceptClanChallenge(Request $request, $id)
     {
         $user = $request->user();
-        $challenge = Challenge::find($id);
+        $challenge = Challenge::where('type', 'clan')->find($id);
 
-        if (!$challenge || $challenge->type !== 'clan') {
+        if (!$challenge) {
             return response()->json([
                 'success' => false,
-                'message' => 'Clan challenge not found'
+                'message' => 'Défi de clan non trouvé.',
             ], 404);
         }
 
         if ($challenge->status !== 'open') {
             return response()->json([
                 'success' => false,
-                'message' => 'Challenge is not open'
+                'message' => 'Ce défi n\'est pas ouvert.',
             ], 400);
         }
 
-        // Vérifier que l'utilisateur est membre du clan qui peut accepter le défi
         if (!$challenge->opponent_clan_id) {
             return response()->json([
                 'success' => false,
-                'message' => 'This challenge has a specific opponent clan'
+                'message' => 'Ce défi n\'a pas de clan adversaire spécifié.',
             ], 400);
         }
 
@@ -1101,270 +902,211 @@ class ChallengeController extends Controller
         if (!$opponentClan || !$opponentClan->isMember($user->id)) {
             return response()->json([
                 'success' => false,
-                'message' => 'You must be a member of the challenged clan to accept this challenge'
-            ], 400);
+                'message' => 'Vous devez être membre du clan adverse pour accepter ce défi.',
+            ], 403);
         }
 
-        // Vérifier si le défi a expiré
         if ($challenge->expires_at && $challenge->expires_at < now()) {
             return response()->json([
                 'success' => false,
-                'message' => 'Challenge has expired'
+                'message' => 'Ce défi a expiré.',
             ], 400);
         }
 
-        // Vérifier que l'utilisateur a suffisamment de balance
-        $wallet = Wallet::where('user_id', $user->id)->first();
-        
-        if (!$wallet) {
+        $wallet = Wallet::where('user_id', $user->id)->firstOrFail();
+        $available = $wallet->balance - $wallet->locked_balance;
+        if ($available < $challenge->bet_amount) {
             return response()->json([
                 'success' => false,
-                'message' => 'Wallet not found'
-            ], 404);
-        }
-
-        $availableBalance = $wallet->balance - $wallet->locked_balance;
-
-        // Vérifier que l'utilisateur a au moins 1000 EBT pour pouvoir utiliser les coins
-        if ($availableBalance < 1000) {
-            return response()->json([
-                'success' => false,
-                'message' => 'You must have at least 1000 EBT (10$) to accept challenges. Your available balance is ' . number_format($availableBalance, 0) . ' EBT'
-            ], 400);
-        }
-
-        if ($availableBalance < $challenge->bet_amount) {
-            return response()->json([
-                'success' => false,
-                'message' => 'Insufficient balance. Your available balance is ' . number_format($availableBalance, 0) . ' EBT'
+                'message' => 'Solde insuffisant.',
             ], 400);
         }
 
         DB::beginTransaction();
         try {
-            // Débiter le solde et verrouiller le montant pour l'utilisateur qui accepte
-            $wallet->balance -= $challenge->bet_amount;
             $wallet->locked_balance += $challenge->bet_amount;
             $wallet->save();
 
-            // Mettre à jour le statut du défi
+            $challenge->opponent_id = $user->id; // Le membre qui accepte représente le clan
             $challenge->status = 'accepted';
-            $challenge->opponent_id = $user->id; // L'utilisateur qui accepte représente son clan
             $challenge->save();
 
             DB::commit();
 
             return response()->json([
                 'success' => true,
-                'message' => 'Clan challenge accepted successfully',
-                'data' => $challenge->load(['creator', 'opponent', 'creatorClan', 'opponentClan'])
+                'message' => 'Défi de clan accepté.',
+                'data'    => $challenge->load(['creator', 'opponent', 'creatorClan', 'opponentClan']),
             ]);
-
         } catch (\Exception $e) {
             DB::rollBack();
+            Log::error('[Challenge::acceptClanChallenge] ' . $e->getMessage());
             return response()->json([
                 'success' => false,
-                'message' => 'Error accepting clan challenge: ' . $e->getMessage()
+                'message' => 'Erreur lors de l\'acceptation.',
             ], 500);
         }
     }
 
-    /**
-     * Start screen recording for a challenge
-     */
+    // ──────────────────────────────────────────────────────────────────────────
+    // LIVE STREAMING (screen recording)
+    // ──────────────────────────────────────────────────────────────────────────
+
     public function startScreenRecording(Request $request, $id)
     {
         $user = $request->user();
-        $challenge = Challenge::find($id);
+        $challenge = Challenge::findOrFail($id);
 
-        if (!$challenge) {
-            return response()->json([
-                'success' => false,
-                'message' => 'Challenge not found'
-            ], 404);
-        }
-
-        // Seul le créateur peut démarrer l'enregistrement d'écran et le live
         if ($challenge->creator_id !== $user->id) {
             return response()->json([
                 'success' => false,
-                'message' => 'Only the challenge creator can start screen recording and live streaming'
+                'message' => 'Seul le créateur peut démarrer le live.',
             ], 403);
         }
 
-        // Le défi doit être accepté ou en cours (démarré) pour lancer le live
         if (!in_array($challenge->status, ['accepted', 'in_progress'])) {
             return response()->json([
                 'success' => false,
-                'message' => 'Challenge must be accepted and started before starting live stream'
-            ], 400);
-        }
-        
-        // Check if already live
-        if ($challenge->is_live) {
-            return response()->json([
-                'success' => false,
-                'message' => 'Live streaming is already active for this challenge'
+                'message' => 'Le défi doit être accepté ou en cours.',
             ], 400);
         }
 
-        // Determine if user is creator (always true here, but kept for consistency)
-        $isCreator = $challenge->creator_id === $user->id;
-        
+        if ($challenge->is_live) {
+            return response()->json([
+                'success' => false,
+                'message' => 'Le live est déjà actif.',
+            ], 400);
+        }
+
         DB::beginTransaction();
         try {
-            // Générer une clé de stream unique
             $streamKey = 'challenge_' . $challenge->id . '_' . time() . '_' . bin2hex(random_bytes(8));
-            
-            // URL RTMP pour le streaming (à configurer selon votre serveur RTMP)
-            $rtmpUrl = env('RTMP_SERVER_URL', 'rtmp://localhost:1935/live');
-            
-            // URL publique pour voir le stream
-            $publicStreamUrl = env('STREAM_PUBLIC_URL', 'http://localhost:8080/hls') . '/challenge_' . $challenge->id . '.m3u8';
-            
-            // Activer l'enregistrement et le live
+            $rtmpUrl = rtrim(env('RTMP_SERVER_URL', 'rtmp://localhost:1935/live'), '/');
+            $publicUrl = env('STREAM_PUBLIC_URL', 'http://localhost:8080/hls') . '/challenge_' . $challenge->id . '.m3u8';
+
             $challenge->creator_screen_recording = true;
             $challenge->is_live = true;
             $challenge->stream_key = $streamKey;
             $challenge->rtmp_url = $rtmpUrl . '/' . $streamKey;
-            $challenge->stream_url = $publicStreamUrl;
+            $challenge->stream_url = $publicUrl;
             $challenge->live_started_at = now();
             $challenge->viewer_count = 0;
-            
-            // Generate a unique stream URL for screen recording
-            if (!$challenge->creator_screen_stream_url) {
-                $challenge->creator_screen_stream_url = 'recording_' . $challenge->id . '_creator_' . time();
-            }
-            
             $challenge->save();
 
             DB::commit();
 
             return response()->json([
                 'success' => true,
-                'message' => 'Live streaming started successfully',
-                'data' => [
-                    'recording' => true,
-                    'is_live' => true,
+                'message' => 'Live démarré.',
+                'data'    => [
                     'stream_key' => $streamKey,
-                    'rtmp_url' => $challenge->rtmp_url,
+                    'rtmp_url'   => $challenge->rtmp_url,
                     'stream_url' => $challenge->stream_url,
-                    'screen_stream_url' => $challenge->creator_screen_stream_url,
-                ]
+                    'is_live'    => true,
+                ],
             ]);
-
         } catch (\Exception $e) {
             DB::rollBack();
+            Log::error('[Challenge::startScreenRecording] ' . $e->getMessage());
             return response()->json([
                 'success' => false,
-                'message' => 'Error starting screen recording: ' . $e->getMessage()
+                'message' => 'Erreur au démarrage du live.',
             ], 500);
         }
     }
 
-    /**
-     * Stop screen recording for a challenge
-     */
     public function stopScreenRecording(Request $request, $id)
     {
         $user = $request->user();
-        $challenge = Challenge::find($id);
+        $challenge = Challenge::findOrFail($id);
 
-        if (!$challenge) {
-            return response()->json([
-                'success' => false,
-                'message' => 'Challenge not found'
-            ], 404);
-        }
-
-        // Seul le créateur peut arrêter le live
         if ($challenge->creator_id !== $user->id) {
             return response()->json([
                 'success' => false,
-                'message' => 'Only the challenge creator can stop the live streaming'
+                'message' => 'Seul le créateur peut arrêter le live.',
             ], 403);
-        }
-
-        DB::beginTransaction();
-        try {
-            // Arrêter l'enregistrement et le live
-            $challenge->creator_screen_recording = false;
-            $challenge->is_live = false;
-            $challenge->live_ended_at = now();
-            $challenge->save();
-
-            DB::commit();
-
-            return response()->json([
-                'success' => true,
-                'message' => 'Live streaming stopped successfully',
-                'data' => [
-                    'recording' => false,
-                    'is_live' => false,
-                ]
-            ]);
-
-        } catch (\Exception $e) {
-            DB::rollBack();
-            return response()->json([
-                'success' => false,
-                'message' => 'Error stopping live streaming: ' . $e->getMessage()
-            ], 500);
-        }
-    }
-
-    /**
-     * Get live stream information for a challenge (public)
-     */
-    public function getLiveStream(Request $request, $id)
-    {
-        $challenge = Challenge::with(['creator', 'opponent'])
-            ->find($id);
-
-        if (!$challenge) {
-            return response()->json([
-                'success' => false,
-                'message' => 'Challenge not found'
-            ], 404);
         }
 
         if (!$challenge->is_live) {
             return response()->json([
                 'success' => false,
-                'message' => 'This challenge is not currently live'
+                'message' => 'Le live n\'est pas actif.',
             ], 400);
         }
 
-        // Incrémenter le nombre de viewers (optionnel, peut être fait côté frontend)
-        // $challenge->increment('viewer_count');
+        $challenge->creator_screen_recording = false;
+        $challenge->is_live = false;
+        $challenge->live_ended_at = now();
+        $challenge->save();
 
         return response()->json([
             'success' => true,
-            'data' => [
-                'challenge' => $challenge,
-                'stream_url' => $challenge->stream_url,
-                'is_live' => $challenge->is_live,
-                'is_live_paused' => $challenge->is_live_paused ?? false,
-                'viewer_count' => $challenge->viewer_count,
-                'live_started_at' => $challenge->live_started_at,
-                'peer_id' => 'challenge_' . $challenge->id, // Pour WebRTC PeerJS
-            ]
+            'message' => 'Live arrêté.',
+            'data'    => ['is_live' => false],
         ]);
     }
 
-    /**
-     * Update viewer count (called by frontend periodically)
-     */
-    public function updateViewerCount(Request $request, $id)
+    public function pauseScreenRecording(Request $request, $id)
     {
-        $challenge = Challenge::find($id);
+        $user = $request->user();
+        $challenge = Challenge::findOrFail($id);
 
-        if (!$challenge) {
+        if ($challenge->creator_id !== $user->id) {
             return response()->json([
                 'success' => false,
-                'message' => 'Challenge not found'
-            ], 404);
+                'message' => 'Seul le créateur peut mettre en pause.',
+            ], 403);
         }
+
+        if (!$challenge->is_live) {
+            return response()->json([
+                'success' => false,
+                'message' => 'Le live n\'est pas actif.',
+            ], 400);
+        }
+
+        $challenge->is_live_paused = true;
+        $challenge->save();
+
+        return response()->json([
+            'success' => true,
+            'message' => 'Live en pause.',
+            'data'    => ['is_live_paused' => true],
+        ]);
+    }
+
+    public function resumeScreenRecording(Request $request, $id)
+    {
+        $user = $request->user();
+        $challenge = Challenge::findOrFail($id);
+
+        if ($challenge->creator_id !== $user->id) {
+            return response()->json([
+                'success' => false,
+                'message' => 'Seul le créateur peut reprendre.',
+            ], 403);
+        }
+
+        if (!$challenge->is_live) {
+            return response()->json([
+                'success' => false,
+                'message' => 'Le live n\'est pas actif.',
+            ], 400);
+        }
+
+        $challenge->is_live_paused = false;
+        $challenge->save();
+
+        return response()->json([
+            'success' => true,
+            'message' => 'Live repris.',
+            'data'    => ['is_live_paused' => false],
+        ]);
+    }
+
+    public function updateViewerCount(Request $request, $id)
+    {
+        $challenge = Challenge::findOrFail($id);
 
         $validator = Validator::make($request->all(), [
             'viewer_count' => 'required|integer|min:0',
@@ -1373,7 +1115,7 @@ class ChallengeController extends Controller
         if ($validator->fails()) {
             return response()->json([
                 'success' => false,
-                'errors' => $validator->errors()
+                'errors'  => $validator->errors(),
             ], 422);
         }
 
@@ -1382,75 +1124,41 @@ class ChallengeController extends Controller
 
         return response()->json([
             'success' => true,
-            'data' => [
-                'viewer_count' => $challenge->viewer_count
-            ]
+            'data'    => ['viewer_count' => $challenge->viewer_count],
         ]);
     }
 
-    /**
-     * Pause the live stream (creator only)
-     */
-    public function pauseScreenRecording(Request $request, $id)
+    public function getLiveStream(Request $request, $id)
     {
-        $user = $request->user();
-        $challenge = Challenge::find($id);
+        $challenge = Challenge::with(['creator', 'opponent'])->find($id);
 
         if (!$challenge) {
-            return response()->json(['success' => false, 'message' => 'Challenge not found'], 404);
-        }
-
-        if ($challenge->creator_id !== $user->id) {
-            return response()->json(['success' => false, 'message' => 'Only the creator can pause the live stream'], 403);
+            return response()->json([
+                'success' => false,
+                'message' => 'Défi non trouvé.',
+            ], 404);
         }
 
         if (!$challenge->is_live) {
-            return response()->json(['success' => false, 'message' => 'Live stream is not active'], 400);
+            return response()->json([
+                'success' => false,
+                'message' => 'Ce défi n\'est pas en live actuellement.',
+            ], 400);
         }
-
-        $challenge->is_live_paused = true;
-        $challenge->save();
 
         return response()->json([
             'success' => true,
-            'message' => 'Live stream paused',
-            'data' => ['is_live_paused' => true]
+            'data'    => [
+                'challenge'       => $challenge,
+                'stream_url'      => $challenge->stream_url,
+                'is_live'         => $challenge->is_live,
+                'is_live_paused'  => $challenge->is_live_paused ?? false,
+                'viewer_count'    => $challenge->viewer_count,
+                'live_started_at' => $challenge->live_started_at,
+            ],
         ]);
     }
 
-    /**
-     * Resume the live stream (creator only)
-     */
-    public function resumeScreenRecording(Request $request, $id)
-    {
-        $user = $request->user();
-        $challenge = Challenge::find($id);
-
-        if (!$challenge) {
-            return response()->json(['success' => false, 'message' => 'Challenge not found'], 404);
-        }
-
-        if ($challenge->creator_id !== $user->id) {
-            return response()->json(['success' => false, 'message' => 'Only the creator can resume the live stream'], 403);
-        }
-
-        if (!$challenge->is_live) {
-            return response()->json(['success' => false, 'message' => 'Live stream is not active'], 400);
-        }
-
-        $challenge->is_live_paused = false;
-        $challenge->save();
-
-        return response()->json([
-            'success' => true,
-            'message' => 'Live stream resumed',
-            'data' => ['is_live_paused' => false]
-        ]);
-    }
-
-    /**
-     * List live challenge streams (for /streams page)
-     */
     public function liveChallenges(Request $request)
     {
         $challenges = Challenge::with(['creator', 'opponent'])
@@ -1461,7 +1169,45 @@ class ChallengeController extends Controller
 
         return response()->json([
             'success' => true,
-            'data' => $challenges
+            'data'    => $challenges,
+        ]);
+    }
+
+    // ──────────────────────────────────────────────────────────────────────────
+    // PARIS (BETS)
+    // ──────────────────────────────────────────────────────────────────────────
+
+    /**
+     * Récupère la liste des paris placés sur un challenge.
+     * Accessible publiquement (lecture seule).
+     */
+    public function getChallengeBets(Request $request, $id)
+    {
+        $challenge = Challenge::find($id);
+
+        if (!$challenge) {
+            return response()->json([
+                'success' => false,
+                'message' => 'Défi non trouvé.',
+            ], 404);
+        }
+
+        // Seuls les défis acceptés, en cours ou terminés exposent leurs paris
+        if (!in_array($challenge->status, ['accepted', 'in_progress', 'completed'])) {
+            return response()->json([
+                'success' => false,
+                'message' => 'Les paris ne sont pas encore visibles pour ce défi.',
+            ], 400);
+        }
+
+        $bets = Bet::where('challenge_id', $challenge->id)
+            ->with('user:id,username')
+            ->orderBy('created_at', 'desc')
+            ->paginate($request->integer('per_page', 20));
+
+        return response()->json([
+            'success' => true,
+            'data'    => $bets,
         ]);
     }
 }
