@@ -3,21 +3,29 @@
 // Get CORS origins from environment or use defaults
 $corsOrigins = env('CORS_ALLOWED_ORIGINS');
 
-// Always allow localhost for local dev (frontend on localhost:5173 calling acmpt.online API)
+// Always allow localhost for local dev + app mobile Capacitor (WebView)
 $allowedOriginsPatterns = [
-    '#^http://localhost:\d+$#',
-    '#^http://127\.0\.0\.1:\d+$#',
+    '#^http://localhost(:\d+)?$#',
+    '#^http://127\.0\.0\.1(:\d+)?$#',
+    '#^https://localhost(:\d+)?$#',
+    '#^capacitor://localhost$#',
+    '#^https://localhost$#',
 ];
 
 if (!$corsOrigins) {
-    // Default origins if not set in .env
+    // Default origins if not set in .env (web + app mobile Capacitor)
     $allowedOrigins = [
         'https://ebetstream.com',
         'https://www.ebetstream.com',
+        'https://acmpt.online',
+        'https://www.acmpt.online',
         'http://localhost:5173',
         'http://127.0.0.1:5173',
         'http://localhost:8000',
         'http://127.0.0.1:8000',
+        'https://localhost',
+        'capacitor://localhost',
+        'null', // WebView mobile envoie parfois Origin: null
     ];
 } elseif ($corsOrigins === '*') {
     $allowedOrigins = ['*'];
