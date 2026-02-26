@@ -75,6 +75,51 @@ Route::get('/deploy-check', function () {
 });
 
 // =============================================================================
+// VIDAGE DES CACHES (protégé par token)
+// GET ou POST /api/clear-cache?token=XXX  ou  Header: X-Clear-Cache-Token: XXX
+// Définir CLEAR_CACHE_TOKEN dans .env sur le serveur.
+// =============================================================================
+Route::match(['get', 'post'], '/clear-cache', function (Request $request) {
+    $token = $request->header('X-Clear-Cache-Token') ?: $request->query('token');
+    $expected = env('CLEAR_CACHE_TOKEN');
+
+    if (empty($expected)) {
+        return response()->json([
+            'success' => false,
+            'message' => 'Clear-cache not configured (set CLEAR_CACHE_TOKEN in .env).',
+        ], 503);
+    }
+
+    if (!hash_equals((string) $expected, (string) $token)) {
+        return response()->json([
+            'success' => false,
+            'message' => 'Invalid or missing token.',
+        ], 403);
+    }
+
+    $commands = ['config:clear', 'cache:clear', 'route:clear', 'view:clear', 'optimize:clear'];
+    $results = [];
+
+    foreach ($commands as $command) {
+        $output = [];
+        $returnVar = -1;
+        exec('php ' . base_path('artisan') . ' ' . $command . ' 2>&1', $output, $returnVar);
+        $results[$command] = [
+            'ok' => $returnVar === 0,
+            'output' => implode("\n", $output),
+        ];
+    }
+
+    $allOk = !in_array(false, array_column($results, 'ok'), true);
+
+    return response()->json([
+        'success' => $allOk,
+        'message' => $allOk ? 'All caches cleared.' : 'Some commands failed.',
+        'results' => $results,
+    ], $allOk ? 200 : 500);
+});
+
+// =============================================================================
 // ROUTES DE STOCKAGE (fichiers publics)
 // =============================================================================
 
