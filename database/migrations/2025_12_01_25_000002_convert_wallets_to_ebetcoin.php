@@ -12,6 +12,18 @@ return new class extends Migration
      */
     public function up(): void
     {
+        // Skip si déjà converti en EBT ou pas de wallets
+        $sample = DB::table('wallets')->first();
+        if (!$sample || ($sample->currency ?? '') === 'EBT') {
+            return;
+        }
+
+        // Agrandir les colonnes pour éviter overflow (balance * 100)
+        Schema::table('wallets', function (Blueprint $table) {
+            $table->decimal('balance', 18, 2)->change();
+            $table->decimal('locked_balance', 18, 2)->change();
+        });
+
         // Convertir toutes les balances de USD en EBT
         // 1 USD = 100 EBT
         // Donc multiplier toutes les balances par 100
