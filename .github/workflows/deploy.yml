@@ -70,7 +70,6 @@ jobs:
               sudo php artisan route:clear
               sudo php artisan config:cache
               sudo php artisan route:cache 
-              sudo php artisan optimize
               sudo php artisan storage:link
             else
               echo "⚠️ .env introuvable, commandes artisan ignorées."
