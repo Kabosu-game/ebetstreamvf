@@ -12,12 +12,18 @@ return new class extends Migration
     public function up(): void
     {
         Schema::table('challenges', function (Blueprint $table) {
-            // URLs pour les streams d'écran des participants
-            $table->string('creator_screen_stream_url')->nullable()->after('opponent_score');
-            $table->string('opponent_screen_stream_url')->nullable()->after('creator_screen_stream_url');
-            // Indicateurs si les streams sont actifs
-            $table->boolean('creator_screen_recording')->default(false)->after('opponent_screen_stream_url');
-            $table->boolean('opponent_screen_recording')->default(false)->after('creator_screen_recording');
+            if (!Schema::hasColumn('challenges', 'creator_screen_stream_url')) {
+                $table->string('creator_screen_stream_url')->nullable()->after('opponent_score');
+            }
+            if (!Schema::hasColumn('challenges', 'opponent_screen_stream_url')) {
+                $table->string('opponent_screen_stream_url')->nullable()->after('creator_screen_stream_url');
+            }
+            if (!Schema::hasColumn('challenges', 'creator_screen_recording')) {
+                $table->boolean('creator_screen_recording')->default(false)->after('opponent_screen_stream_url');
+            }
+            if (!Schema::hasColumn('challenges', 'opponent_screen_recording')) {
+                $table->boolean('opponent_screen_recording')->default(false)->after('creator_screen_recording');
+            }
         });
     }
 

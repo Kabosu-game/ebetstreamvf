@@ -73,7 +73,8 @@ class ChallengeController extends Controller
         return response()->json([
             'success' => true,
             'data'    => $challenges,
-        ]);
+        ])->header('Cache-Control', 'no-store, no-cache, must-revalidate')
+          ->header('Pragma', 'no-cache');
     }
 
     /**
@@ -93,7 +94,8 @@ class ChallengeController extends Controller
         return response()->json([
             'success' => true,
             'data'    => $challenge,
-        ]);
+        ])->header('Cache-Control', 'no-store, no-cache, must-revalidate')
+          ->header('Pragma', 'no-cache');
     }
 
     /**

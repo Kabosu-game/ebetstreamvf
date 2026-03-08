@@ -97,7 +97,8 @@ class Event extends Model
             return $this->image;
         }
 
-        return asset('storage/' . $this->image);
+        $baseUrl = rtrim(config('app.url', 'http://localhost:8000'), '/');
+        return $baseUrl . '/api/storage/' . ltrim($this->image, '/');
     }
 
     /**

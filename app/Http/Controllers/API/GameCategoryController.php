@@ -175,26 +175,27 @@ class GameCategoryController extends Controller
     private function formatCategory($category)
     {
         $categoryArray = $category->toArray();
-        
+        $baseUrl = rtrim(config('app.url', 'http://localhost:8000'), '/') . '/api/storage';
+
         // Ajouter l'URL complète de l'icône
         if ($category->icon) {
-            $categoryArray['icon_url'] = 'https://acmpt.online/api/storage/' . ltrim($category->icon, '/');
+            $categoryArray['icon_url'] = $baseUrl . '/' . ltrim($category->icon, '/');
         } else {
             $categoryArray['icon_url'] = null;
         }
-        
+
         // Formater les jeux si présents
         if (isset($categoryArray['games']) && is_array($categoryArray['games'])) {
-            $categoryArray['games'] = array_map(function($game) {
+            $categoryArray['games'] = array_map(function($game) use ($baseUrl) {
                 if (isset($game['icon']) && $game['icon']) {
-                    $game['icon_url'] = 'https://acmpt.online/api/storage/' . ltrim($game['icon'], '/');
+                    $game['icon_url'] = $baseUrl . '/' . ltrim($game['icon'], '/');
                 } else {
                     $game['icon_url'] = null;
                 }
                 return $game;
             }, $categoryArray['games']);
         }
-        
+
         return $categoryArray;
     }
 }

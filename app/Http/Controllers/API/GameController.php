@@ -209,14 +209,14 @@ class GameController extends Controller
     private function formatGame($game)
     {
         $gameArray = $game->toArray();
-        
+        $baseUrl = rtrim(config('app.url', 'http://localhost:8000'), '/') . '/api/storage';
+
         // Ajouter l'URL complète de l'icône
         if ($game->icon) {
             $iconPath = storage_path('app/public/' . $game->icon);
             if (file_exists($iconPath)) {
-                $gameArray['icon_url'] = 'https://acmpt.online/api/storage/' . ltrim($game->icon, '/');
+                $gameArray['icon_url'] = $baseUrl . '/' . ltrim($game->icon, '/');
             } else {
-                // Image par défaut si le fichier n'existe pas
                 $gameArray['icon_url'] = 'https://via.placeholder.com/100x100/667eea/ffffff?text=' . urlencode(substr($game->name, 0, 3));
             }
         } else {
@@ -227,15 +227,14 @@ class GameController extends Controller
         if ($game->image) {
             $imagePath = storage_path('app/public/' . $game->image);
             if (file_exists($imagePath)) {
-                $gameArray['image_url'] = 'https://acmpt.online/api/storage/' . ltrim($game->image, '/');
+                $gameArray['image_url'] = $baseUrl . '/' . ltrim($game->image, '/');
             } else {
-                // Image par défaut si le fichier n'existe pas
                 $gameArray['image_url'] = 'https://via.placeholder.com/300x200/667eea/ffffff?text=' . urlencode($game->name);
             }
         } else {
             $gameArray['image_url'] = 'https://via.placeholder.com/300x200/667eea/ffffff?text=' . urlencode($game->name);
         }
-        
+
         return $gameArray;
     }
 }
