@@ -632,4 +632,4 @@ class StreamController extends Controller
             'viewer'   => "{$base}/watch/{$stream->id}",
         ];
     }
-}
+}      
