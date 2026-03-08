@@ -2,8 +2,8 @@ name: Deploy Laravel App
 
 on:
   push:
-    branches: [ "main" ]
-  workflow_dispatch:  # Déploiement manuel possible
+    branches: ["main"]
+  workflow_dispatch: # Déploiement manuel possible
 
 jobs:
   deploy:
@@ -16,14 +16,14 @@ jobs:
       - name: Setup PHP
         uses: shivammathur/setup-php@v2
         with:
-          php-version: '8.2'
+          php-version: "8.2"
           extensions: mbstring, xml, ctype, iconv, intl, pdo_mysql, dom, filter, gd, json, bcmath
           tools: composer:v2
 
       - name: Setup Node.js
         uses: actions/setup-node@v4
         with:
-          node-version: '20'
+          node-version: "20"
 
       - name: Install PHP dependencies
         run: composer install --no-interaction --prefer-dist --optimize-autoloader --no-dev
@@ -60,27 +60,24 @@ jobs:
           sshpass -p "${{ secrets.SERVER_PASSWORD }}" ssh -o StrictHostKeyChecking=no "${{ secrets.SERVER_USER }}"@"${{ secrets.SERVER_IP }}" << 'ENDSSH'
             set -e
             cd "${{ secrets.DEPLOY_PATH }}"
-
+            # Fix permissions
+            sudo chown -R apache:apache storage bootstrap/cache
+            sudo chmod -R 775 storage bootstrap/cache
             # Nettoyer les caches uniquement si .env existe
             if [ -f .env ]; then
-              php artisan config:clear
-              php artisan cache:clear
-              php artisan view:clear
-              php artisan route:clear
-
-              # Recréer les caches
-              php artisan config:cache
-              php artisan route:cache
-              php artisan view:cache
-              php artisan optimize
-              php artisan storage:link
+              sudo php artisan config:clear
+              sudo php artisan cache:clear
+              sudo php artisan view:clear
+              sudo php artisan route:clear
+              sudo php artisan config:cache
+              sudo php artisan route:cache
+              sudo php artisan view:cache
+              sudo php artisan optimize
+              sudo php artisan storage:link
             else
               echo "⚠️ .env introuvable, commandes artisan ignorées."
             fi
-
-            # Redémarrer les services
-            sudo systemctl reload php8.2-fpm 2>/dev/null || true
+            sudo systemctl reload php-fpm 2>/dev/null || true
             sudo systemctl reload nginx 2>/dev/null || true
-
             echo "✅ Déploiement terminé avec succès"
           ENDSSH
