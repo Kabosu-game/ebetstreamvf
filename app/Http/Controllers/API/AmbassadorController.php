@@ -165,15 +165,13 @@ class AmbassadorController extends Controller
     private function formatAmbassador($ambassador)
     {
         $ambassadorArray = $ambassador->toArray();
-        
-        // Ajouter l'URL complète de l'avatar avec /api/storage/
+
         if ($ambassador->avatar) {
-            $ambassadorArray['avatar_url'] = 'https://acmpt.online/api/storage/' . $ambassador->avatar;
+            $ambassadorArray['avatar_url'] = url('/api/storage/' . ltrim($ambassador->avatar, '/'));
         } else {
-            // Photo par défaut - utiliser une URL de placeholder ou une image SVG encodée
             $ambassadorArray['avatar_url'] = 'https://ui-avatars.com/api/?name=' . urlencode($ambassador->name) . '&background=667eea&color=fff&size=200';
         }
-        
+
         return $ambassadorArray;
     }
 }

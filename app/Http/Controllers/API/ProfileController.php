@@ -47,30 +47,7 @@ class ProfileController extends Controller
         }
 
         $profileData = $profile->load('user')->toArray();
-        
-        // Ajouter l'URL complète de la photo de profil
-        // Utiliser l'API route pour servir les images directement
-        $baseUrl = rtrim(config('app.url'), '/') . '/api';
-        
-        if ($profile->profile_photo) {
-            // Vérifier si le fichier existe
-            if (Storage::disk('public')->exists($profile->profile_photo)) {
-                // Extraire le nom du fichier depuis le chemin
-                $filename = basename($profile->profile_photo);
-                $profileData['profile_photo_url'] = $baseUrl . '/storage/profiles/' . $filename;
-            } else {
-                $profileData['profile_photo_url'] = null;
-            }
-        } elseif ($profile->avatar) {
-            if (Storage::disk('public')->exists($profile->avatar)) {
-                $filename = basename($profile->avatar);
-                $profileData['profile_photo_url'] = $baseUrl . '/storage/profiles/' . $filename;
-            } else {
-                $profileData['profile_photo_url'] = null;
-            }
-        } else {
-            $profileData['profile_photo_url'] = null;
-        }
+        $profileData['profile_photo_url'] = $this->buildPhotoUrl($profile);
 
         return response()->json([
             'success' => true,
@@ -171,41 +148,36 @@ class ProfileController extends Controller
             $profile->refresh();
         }
 
-        // Recharger l'utilisateur pour avoir les données à jour
         $user->refresh();
         $profile->refresh();
-        
+
         $profileData = $profile->load('user')->toArray();
-        
-        // Ajouter l'URL complète de la photo de profil
-        // Utiliser l'API route pour servir les images directement
-        $baseUrl = rtrim(config('app.url'), '/') . '/api';
-        
-        if ($profile->profile_photo) {
-            // Vérifier si le fichier existe
-            if (Storage::disk('public')->exists($profile->profile_photo)) {
-                // Extraire le nom du fichier depuis le chemin
-                $filename = basename($profile->profile_photo);
-                $profileData['profile_photo_url'] = $baseUrl . '/storage/profiles/' . $filename;
-            } else {
-                $profileData['profile_photo_url'] = null;
-            }
-        } elseif ($profile->avatar) {
-            if (Storage::disk('public')->exists($profile->avatar)) {
-                $filename = basename($profile->avatar);
-                $profileData['profile_photo_url'] = $baseUrl . '/storage/profiles/' . $filename;
-            } else {
-                $profileData['profile_photo_url'] = null;
-            }
-        } else {
-            $profileData['profile_photo_url'] = null;
-        }
-        
+        $profileData['profile_photo_url'] = $this->buildPhotoUrl($profile);
+
         return response()->json([
             'success' => true,
             'message' => 'Profil mis à jour avec succès',
             'data' => $profileData
         ]);
+    }
+
+    /**
+     * Construit l'URL publique de la photo de profil.
+     * Retourne null si aucun fichier n'est trouvé.
+     */
+    private function buildPhotoUrl(Profile $profile): ?string
+    {
+        $path = $profile->profile_photo ?? $profile->avatar;
+
+        if (!$path) {
+            return null;
+        }
+
+        if (!Storage::disk('public')->exists($path)) {
+            return null;
+        }
+
+        return url('/api/storage/' . ltrim($path, '/'));
     }
 
     /**

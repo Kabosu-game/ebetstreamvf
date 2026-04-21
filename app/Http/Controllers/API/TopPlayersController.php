@@ -55,9 +55,9 @@ class TopPlayersController extends Controller
             // Photo de profil
             $avatarUrl = null;
             if ($profile->profile_photo) {
-                $avatarUrl = 'https://acmpt.online/api/storage/' . ltrim($profile->profile_photo, '/');
+                $avatarUrl = url('/api/storage/' . ltrim($profile->profile_photo, '/'));
             } elseif ($profile->avatar) {
-                $avatarUrl = 'https://acmpt.online/api/storage/' . ltrim($profile->avatar, '/');
+                $avatarUrl = url('/api/storage/' . ltrim($profile->avatar, '/'));
             } else {
                 $name = $profile->full_name ?? $user->username;
                 $avatarUrl = 'https://ui-avatars.com/api/?name=' . urlencode($name) . '&background=667eea&color=fff&size=200';
@@ -117,9 +117,9 @@ class TopPlayersController extends Controller
         // Photo de profil
         $avatarUrl = null;
         if ($profile->profile_photo) {
-            $avatarUrl = 'https://acmpt.online/api/storage/' . ltrim($profile->profile_photo, '/');
+            $avatarUrl = url('/api/storage/' . ltrim($profile->profile_photo, '/'));
         } elseif ($profile->avatar) {
-            $avatarUrl = 'https://acmpt.online/api/storage/' . ltrim($profile->avatar, '/');
+            $avatarUrl = url('/api/storage/' . ltrim($profile->avatar, '/'));
         } else {
             $name = $profile->full_name ?? $user->username;
             $avatarUrl = 'https://ui-avatars.com/api/?name=' . urlencode($name) . '&background=667eea&color=fff&size=200';

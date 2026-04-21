@@ -33,6 +33,7 @@ use App\Http\Controllers\API\FederationController;
 use App\Http\Controllers\API\BallonDorController;
 use App\Http\Controllers\API\AdminFederationController;
 use App\Http\Controllers\API\AdminBallonDorController;
+use App\Http\Controllers\API\AdminMonetizationController;
 use App\Http\Controllers\API\TeamMarketplaceController;
 use App\Http\Controllers\API\TournamentController;
 use App\Http\Controllers\API\ChampionshipController;
@@ -787,6 +788,20 @@ Route::middleware(['auth:sanctum', 'throttle:60,1'])->group(function () {
         Route::post('/', [AdminPromoCodeController::class, 'store']);
         Route::put('/{id}', [AdminPromoCodeController::class, 'update']);
         Route::delete('/{id}', [AdminPromoCodeController::class, 'destroy']);
+    });
+
+    // Admin - Monetization program
+    Route::prefix('admin/monetization')->group(function () {
+        Route::get('/', [AdminMonetizationController::class, 'index']);
+        Route::put('/settings/{settingKey}', [AdminMonetizationController::class, 'updateSetting']);
+
+        Route::post('/streamer-tiers', [AdminMonetizationController::class, 'storeStreamerTier']);
+        Route::put('/streamer-tiers/{id}', [AdminMonetizationController::class, 'updateStreamerTier']);
+        Route::delete('/streamer-tiers/{id}', [AdminMonetizationController::class, 'destroyStreamerTier']);
+
+        Route::post('/agent-tiers', [AdminMonetizationController::class, 'storeAgentTier']);
+        Route::put('/agent-tiers/{id}', [AdminMonetizationController::class, 'updateAgentTier']);
+        Route::delete('/agent-tiers/{id}', [AdminMonetizationController::class, 'destroyAgentTier']);
     });
 
     // Admin - Paris

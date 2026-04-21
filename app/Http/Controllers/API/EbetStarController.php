@@ -31,8 +31,10 @@ class EbetStarController extends Controller
                 ->map(function ($user) {
                     $profile = $user->profile;
                     $wallet = $user->wallet;
-                    $profilePhoto = $profile && $profile->profile_photo ? $profile->profile_photo : null;
-                    $profilePhotoUrl = $profilePhoto ? url('/api/storage/profiles/' . basename($profilePhoto)) : null;
+                    $profilePhoto = $profile ? ($profile->profile_photo ?? $profile->avatar) : null;
+                    $profilePhotoUrl = $profilePhoto
+                        ? url('/api/storage/' . ltrim($profilePhoto, '/'))
+                        : null;
                     
                     // Helper function to return null if empty string
                     $getValue = function($value) {

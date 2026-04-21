@@ -165,17 +165,15 @@ class PartnerController extends Controller
     private function formatPartner($partner)
     {
         $partnerArray = $partner->toArray();
-        
-        // Ajouter l'URL complète de l'avatar
+
         if ($partner->avatar) {
-            $partnerArray['avatar_url'] = 'https://acmpt.online/api/storage/' . $partner->avatar;
+            $partnerArray['avatar_url'] = url('/api/storage/' . ltrim($partner->avatar, '/'));
         } elseif ($partner->logo) {
-            $partnerArray['avatar_url'] = 'https://acmpt.online/api/storage/' . $partner->logo;
+            $partnerArray['avatar_url'] = url('/api/storage/' . ltrim($partner->logo, '/'));
         } else {
-            // Photo par défaut
             $partnerArray['avatar_url'] = 'https://ui-avatars.com/api/?name=' . urlencode($partner->name) . '&background=667eea&color=fff&size=200';
         }
-        
+
         return $partnerArray;
     }
 }
