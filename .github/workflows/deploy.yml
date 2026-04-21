@@ -41,8 +41,22 @@ jobs:
           chmod 600 ~/.ssh/deploy_key
           ssh-keyscan -H "${{ secrets.SERVER_IP }}" >> ~/.ssh/known_hosts
 
+      - name: Check SSH connectivity
+        run: |
+          SSH_PORT="${{ secrets.SERVER_PORT }}"
+          if [ -z "$SSH_PORT" ]; then SSH_PORT=22; fi
+          echo "🔎 Test connectivité SSH vers ${{ secrets.SERVER_IP }}:$SSH_PORT"
+          timeout 12 bash -c "cat < /dev/null > /dev/tcp/${{ secrets.SERVER_IP }}/${SSH_PORT}" || {
+            echo "❌ Impossible de joindre le serveur SSH (${{ secrets.SERVER_IP }}:$SSH_PORT)."
+            echo "Vérifiez SERVER_IP, SERVER_PORT, firewall/security group et que sshd écoute."
+            exit 1
+          }
+          echo "✅ SSH reachable"
+
       - name: Deploy files to VPS
         run: |
+          SSH_PORT="${{ secrets.SERVER_PORT }}"
+          if [ -z "$SSH_PORT" ]; then SSH_PORT=22; fi
           rsync -avz --delete \
             --exclude='.git' \
             --exclude='.github' \
@@ -56,12 +70,14 @@ jobs:
             --exclude='storage/*.key' \
             --exclude='bootstrap/cache/*' \
             --chmod=D755,F644 \
-            -e "ssh -i ~/.ssh/deploy_key -o StrictHostKeyChecking=no" \
+            -e "ssh -p ${SSH_PORT} -i ~/.ssh/deploy_key -o StrictHostKeyChecking=no -o ConnectTimeout=15" \
             ./ "${{ secrets.SERVER_USER }}"@"${{ secrets.SERVER_IP }}":"${{ secrets.DEPLOY_PATH }}" || [ $? -eq 23 ] && echo "⚠️ Transfert terminé avec avertissements" || exit $?
 
       - name: Run post-deployment commands
         run: |
-          ssh -i ~/.ssh/deploy_key -o StrictHostKeyChecking=no "${{ secrets.SERVER_USER }}"@"${{ secrets.SERVER_IP }}" << 'ENDSSH'
+          SSH_PORT="${{ secrets.SERVER_PORT }}"
+          if [ -z "$SSH_PORT" ]; then SSH_PORT=22; fi
+          ssh -p "${SSH_PORT}" -i ~/.ssh/deploy_key -o StrictHostKeyChecking=no -o ConnectTimeout=15 "${{ secrets.SERVER_USER }}"@"${{ secrets.SERVER_IP }}" << 'ENDSSH'
             set -e
             cd "${{ secrets.DEPLOY_PATH }}"
             # Fix permissions
