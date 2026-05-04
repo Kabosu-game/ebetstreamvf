@@ -15,6 +15,8 @@ $allowedOriginsPatterns = [
 if (!$corsOrigins) {
     // Default origins if not set in .env (web + app mobile Capacitor)
     $allowedOrigins = [
+        'https://ebetstream.live',
+        'https://www.ebetstream.live',
         'https://ebetstream.com',
         'https://www.ebetstream.com',
         'https://acmpt.online',
