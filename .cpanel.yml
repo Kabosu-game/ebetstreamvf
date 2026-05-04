@@ -1,0 +1,6 @@
+---
+deployment:
+  tasks:
+    - export APPDIR=/home/$USER/ebetstreamvf/stream-server
+    - cd $APPDIR && npm install --production --silent
+    - mkdir -p $APPDIR/tmp && touch $APPDIR/tmp/restart.txt

@@ -1,0 +1,15 @@
+{
+  "name": "ebet-stream-server",
+  "version": "1.0.0",
+  "description": "eBetStream WebRTC Signaling Server",
+  "main": "stream-server.js",
+  "scripts": {
+    "start": "node stream-server.js"
+  },
+  "engines": {
+    "node": ">=18.0.0"
+  },
+  "dependencies": {
+    "ws": "^8.18.0"
+  }
+}
