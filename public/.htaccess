@@ -12,15 +12,6 @@
     # Allow from VOTRE_IP
 </FilesMatch>
 
-# CORS headers pour le preflight OPTIONS
-<IfModule mod_headers.c>
-    SetEnvIf Origin "^https://(www\.)?ebetstream\.live$" CORS_OK=1
-    Header always set Access-Control-Allow-Origin "https://ebetstream.live" env=CORS_OK
-    Header always set Access-Control-Allow-Methods "GET, POST, PUT, PATCH, DELETE, OPTIONS" env=CORS_OK
-    Header always set Access-Control-Allow-Headers "Content-Type, Authorization, X-Requested-With, Accept, Origin" env=CORS_OK
-    Header always set Access-Control-Allow-Credentials "true" env=CORS_OK
-</IfModule>
-
 # Configuration Laravel standard
 <IfModule mod_rewrite.c>
     <IfModule mod_negotiation.c>
@@ -29,9 +20,9 @@
 
     RewriteEngine On
 
-    # Répondre directement aux requêtes OPTIONS (preflight CORS) sans passer par PHP
+    # Forcer OPTIONS vers PHP pour que Laravel gère le preflight CORS
     RewriteCond %{REQUEST_METHOD} OPTIONS
-    RewriteRule .* - [R=204,L]
+    RewriteRule .* index.php [L]
 
     # Handle Authorization Header
     RewriteCond %{HTTP:Authorization} .
