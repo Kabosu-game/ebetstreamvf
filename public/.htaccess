@@ -12,6 +12,20 @@
     # Allow from VOTRE_IP
 </FilesMatch>
 
+# CORS headers on every response (including redirects) via mod_headers
+<IfModule mod_headers.c>
+    SetEnvIf Origin "^https://(www\.)?ebetstream\.live$" CORS_ORIGIN=$0
+    SetEnvIf Origin "^https://(www\.)?ebetstream\.com$" CORS_ORIGIN=$0
+    SetEnvIf Origin "^capacitor://localhost$"            CORS_ORIGIN=$0
+    SetEnvIf Origin "^http://localhost(:[0-9]+)?$"       CORS_ORIGIN=$0
+
+    Header always set Access-Control-Allow-Origin      "%{CORS_ORIGIN}e" env=CORS_ORIGIN
+    Header always set Access-Control-Allow-Credentials "true"            env=CORS_ORIGIN
+    Header always set Access-Control-Allow-Methods     "GET, POST, PUT, PATCH, DELETE, OPTIONS" env=CORS_ORIGIN
+    Header always set Access-Control-Allow-Headers     "Content-Type, Authorization, X-Requested-With, Accept, Origin" env=CORS_ORIGIN
+    Header always set Vary                             "Origin"
+</IfModule>
+
 # Configuration Laravel standard
 <IfModule mod_rewrite.c>
     <IfModule mod_negotiation.c>
