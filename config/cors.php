@@ -41,7 +41,7 @@ $supportsCredentials = $corsOrigins && $corsOrigins !== '*';
 
 return [
 
-    'paths' => ['api/*', 'sanctum/csrf-cookie'],
+    'paths' => [], // CORS handled in public/index.php to avoid duplicate headers
 
     'allowed_methods' => ['*'],
 
