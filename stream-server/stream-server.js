@@ -118,7 +118,12 @@ const server = http.createServer((req, res) => {
 });
 
 // ── WebSocket server ──────────────────────────────────────────────────────────
-const wss = new WebSocket.Server({ server });
+const wss = new WebSocket.Server({ server, perMessageDeflate: false });
+
+// Disable Nginx proxy buffering/compression for WebSocket connections
+wss.on('headers', (headers) => {
+  headers.push('X-Accel-Buffering: no');
+});
 
 wss.on('connection', async (ws, req) => {
   const urlParts  = req.url.split('?');
