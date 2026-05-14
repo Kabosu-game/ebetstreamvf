@@ -7,7 +7,7 @@ define('LARAVEL_START', microtime(true));
 
 // CORS : injecter les headers sur toutes les requêtes cross-origin
 $origin = $_SERVER['HTTP_ORIGIN'] ?? '';
-$allowed = ['https://ebetstream.live', 'https://www.ebetstream.live', 'capacitor://localhost'];
+$allowed = ['https://ebetstream.live', 'https://www.ebetstream.live', 'capacitor://localhost', 'https://localhost', 'http://localhost'];
 if (in_array($origin, $allowed)) {
     header("Access-Control-Allow-Origin: $origin");
     header('Access-Control-Allow-Credentials: true');
