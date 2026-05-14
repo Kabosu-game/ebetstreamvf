@@ -20,6 +20,10 @@
 /storage/framework/views/*
 !/storage/framework/views
 /storage/pail
+/storage/app/public/*
+!/storage/app/public/.gitkeep
+/bootstrap/cache/*
+!/bootstrap/cache/.gitignore
 /vendor
 Homestead.json
 Homestead.yaml
