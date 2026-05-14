@@ -16,6 +16,9 @@ return Application::configure(basePath: dirname(__DIR__))
         $middleware->api(prepend: [
             \App\Http\Middleware\ForceJsonResponse::class,
         ]);
+        $middleware->alias([
+            'internal.token' => \App\Http\Middleware\InternalTokenMiddleware::class,
+        ]);
     })
     ->withExceptions(function (Exceptions $exceptions): void {
         // API routes always return JSON 401, never redirect to login (avoids Route [login] not defined)

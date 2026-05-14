@@ -3,6 +3,7 @@
 namespace App\Http\Controllers\API;
 
 use App\Http\Controllers\Controller;
+use App\Models\MonetizationSetting;
 use App\Models\Stream;
 use App\Models\StreamDonation;
 use App\Services\MonetizationService;
@@ -41,13 +42,6 @@ class DonationController extends Controller
                           ?? ['streamer_percent' => 85, 'platform_percent' => 15];
         $streamerPct    = (float) ($split['streamer_percent'] ?? 85);
         $platformPct    = (float) ($split['platform_percent'] ?? 15);
-
-        // Apply streamer tier override if configured
-        $tier = MonetizationService::resolveStreamerTier($stream->follower_count ?? 0);
-        if ($tier) {
-            $streamerPct = $tier->commission_percentage;
-            $platformPct = 100 - $streamerPct;
-        }
 
         $streamerAmount = round($amount * $streamerPct / 100, 2);
         $platformAmount = round($amount - $streamerAmount, 2);

@@ -2,24 +2,20 @@
  * eBetStream — WebRTC Signaling Server
  *
  * Routes :
- *   Streamer → ws://host/stream/{id}?token=xxx
- *   Viewer   → ws://host/watch/{id}?token=xxx
- *   Health   → http://host/health
+ *   Streamer → wss://host/stream/{id}?token=xxx
+ *   Viewer   → wss://host/watch/{id}?token=xxx
+ *   Health   → https://host/health
  *
- * Déploiement o2switch :
- *   - Placer ce dossier dans le répertoire home de l'hébergement
- *   - Configurer via cPanel → "Setup Node.js App"
- *   - Application startup file : stream-server.js
- *   - PORT est injecté automatiquement par Phusion Passenger
+ * Déploiement Railway :
+ *   - PORT est injecté automatiquement par Railway
+ *   - Variables d'env à configurer : LARAVEL_API_URL, LARAVEL_INTERNAL_TOKEN
  */
 
 const WebSocket = require('ws');
 const http      = require('http');
 const https     = require('https');
 
-// Passenger (o2switch) injecte process.env.PORT automatiquement
-// STREAM_WS_PORT est le fallback pour un VPS classique (ex: port 8082)
-const PORT            = process.env.PORT || process.env.STREAM_WS_PORT || 8082;
+const PORT            = process.env.PORT || 8080;
 const LARAVEL_API_URL = process.env.LARAVEL_API_URL        || 'https://api.ebetstream.live/api';
 const LARAVEL_TOKEN   = process.env.LARAVEL_INTERNAL_TOKEN || '';
 
@@ -61,11 +57,7 @@ function verifyToken(token) {
       res.on('end', () => {
         try {
           const json = JSON.parse(data);
-          if (json?.id) {
-            resolve(json.id);
-          } else {
-            resolve('guest_' + token.slice(0, 8));
-          }
+          resolve(json?.id ?? ('guest_' + token.slice(0, 8)));
         } catch (e) {
           resolve('guest_' + token.slice(0, 8));
         }
@@ -120,16 +112,9 @@ const server = http.createServer((req, res) => {
 // ── WebSocket server ──────────────────────────────────────────────────────────
 const wss = new WebSocket.Server({ server, perMessageDeflate: false });
 
-// Disable Nginx proxy buffering/compression for WebSocket connections
-wss.on('headers', (headers) => {
-  headers.push('X-Accel-Buffering: no');
-});
-
 wss.on('connection', async (ws, req) => {
   const urlParts  = req.url.split('?');
-  // Supprimer le préfixe /ws si présent (configuration cPanel : wss://api.ebetstream.live/ws)
-  const rawPath   = urlParts[0].replace(/^\/ws/, '');
-  const pathParts = rawPath.split('/').filter(Boolean);
+  const pathParts = urlParts[0].split('/').filter(Boolean);
   const role      = pathParts[0];
   const streamId  = pathParts[1];
   const params    = new URLSearchParams(urlParts[1] || '');
@@ -140,8 +125,6 @@ wss.on('connection', async (ws, req) => {
     return;
   }
 
-  // Les streamers DOIVENT être authentifiés
-  // Les viewers peuvent être non-connectés → guest ID
   if (role === 'stream' && !token) {
     ws.close(1008, 'Token required for streaming');
     return;
@@ -149,7 +132,6 @@ wss.on('connection', async (ws, req) => {
 
   let userId;
   if (!token) {
-    // Viewer non connecté : guest anonyme
     userId = 'guest_' + Math.random().toString(36).slice(2, 10);
   } else {
     userId = await verifyToken(token);
@@ -158,7 +140,6 @@ wss.on('connection', async (ws, req) => {
       return;
     }
     if (!userId) {
-      // Viewer avec token invalide → guest quand même
       userId = 'guest_' + Math.random().toString(36).slice(2, 10);
     }
   }
@@ -176,11 +157,9 @@ wss.on('connection', async (ws, req) => {
 
     send(ws, { type: 'ready', viewerCount: room.viewers.size });
 
-    if (room.viewers.size > 0) {
-      room.viewers.forEach((vws, viewerId) => {
-        send(ws, { type: 'viewer-joined', viewerId, count: room.viewers.size });
-      });
-    }
+    room.viewers.forEach((vws, viewerId) => {
+      send(ws, { type: 'viewer-joined', viewerId, count: room.viewers.size });
+    });
 
     ws.on('message', (raw) => {
       let msg;
@@ -249,7 +228,6 @@ wss.on('connection', async (ws, req) => {
           }
           break;
 
-        // Broadcast d'un message de chat à tous les viewers de la room
         case 'chat-message':
           if (msg.text && msg.text.length <= 500) {
             const chatMsg = {
@@ -259,11 +237,9 @@ wss.on('connection', async (ws, req) => {
               text: msg.text,
               ts: Date.now(),
             };
-            // Envoyer à tous les viewers sauf l'expéditeur
             room.viewers.forEach((vws, vid) => {
               if (vid !== viewerId) send(vws, chatMsg);
             });
-            // Envoyer aussi au streamer pour qu'il voie le chat
             send(room.streamer, chatMsg);
           }
           break;
@@ -285,10 +261,13 @@ wss.on('connection', async (ws, req) => {
 });
 
 server.listen(PORT, () => {
+  const host = process.env.RAILWAY_PUBLIC_DOMAIN
+    ? `wss://${process.env.RAILWAY_PUBLIC_DOMAIN}`
+    : `ws://localhost:${PORT}`;
   console.log(`✅ eBetStream Signaling Server → port ${PORT}`);
-  console.log(`   Streamer : wss://api.ebetstream.live/ws/stream/{id}?token=xxx`);
-  console.log(`   Viewer   : wss://api.ebetstream.live/ws/watch/{id}?token=xxx`);
-  console.log(`   Health   : https://api.ebetstream.live/ws/health`);
+  console.log(`   Streamer : ${host}/stream/{id}?token=xxx`);
+  console.log(`   Viewer   : ${host}/watch/{id}?token=xxx`);
+  console.log(`   Health   : ${host.replace('wss://', 'https://').replace('ws://', 'http:/')}/health`);
 });
 
 process.on('SIGTERM', () => {

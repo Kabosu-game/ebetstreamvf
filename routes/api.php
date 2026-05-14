@@ -62,6 +62,10 @@ Route::middleware('auth:sanctum')->get('/token/verify', [TokenVerifyController::
 // =============================================================================
 Route::middleware(['internal.token'])->group(function () {
     Route::get('/internal/stream-key/{id}', [StreamController::class, 'internalGetStreamKey']);
+
+    // Arena Game Server (arena-server.js)
+    Route::get('/internal/arena/{matchId}/player/{userId}', [\App\Http\Controllers\API\InternalArenaController::class, 'playerTeam']);
+    Route::post('/internal/arena/{matchId}/result', [\App\Http\Controllers\API\InternalArenaController::class, 'setResult']);
 });
 
 // =============================================================================
