@@ -16,11 +16,10 @@ class AdminUserSeeder extends Seeder
     public function run(): void
     {
         // Créer un utilisateur admin par défaut
-        $admin = User::firstOrCreate(
+        $admin = User::updateOrCreate(
             ['email' => 'admin@ebetstream.com'],
             [
                 'username' => 'admin',
-                'email' => 'admin@ebetstream.com',
                 'password' => Hash::make('admin123'),
                 'role' => 'admin',
             ]

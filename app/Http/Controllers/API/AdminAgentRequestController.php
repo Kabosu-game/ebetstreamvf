@@ -5,6 +5,9 @@ namespace App\Http\Controllers\API;
 use App\Http\Controllers\Controller;
 use App\Models\AgentRequest;
 use App\Models\RechargeAgent;
+use App\Models\AgentTier;
+use App\Models\User;
+use App\Services\AgentCryptoService;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\Validator;
 use Illuminate\Support\Facades\DB;
@@ -12,6 +15,7 @@ use Illuminate\Database\QueryException;
 
 class AdminAgentRequestController extends Controller
 {
+    public function __construct(private AgentCryptoService $agentCryptoService) {}
     /**
      * Get all agent requests with filters
      */
@@ -100,18 +104,32 @@ class AdminAgentRequestController extends Controller
                 'status' => 'approved',
             ]);
 
+            // Lier le compte utilisateur (demande connectée ou email existant)
+            $userId = $agentRequest->user_id;
+            if (!$userId && $agentRequest->email) {
+                $userId = User::where('email', $agentRequest->email)->value('id');
+                if ($userId) {
+                    $agentRequest->update(['user_id' => $userId]);
+                }
+            }
+
             // Create or update RechargeAgent
             $rechargeAgent = RechargeAgent::updateOrCreate(
-                [
-                    'phone' => $agentRequest->whatsapp,
-                ],
+                ['phone' => $agentRequest->whatsapp],
                 [
                     'name' => $agentRequest->name,
                     'phone' => $agentRequest->whatsapp,
                     'status' => 'active',
-                    'description' => $agentRequest->message ?? 'Agent de recharge approuvé',
+                    'description' => $agentRequest->message ?? 'Agent crypto certifié EBETSTREAM',
+                    'user_id' => $userId,
                 ]
             );
+
+            if ($userId) {
+                $this->agentCryptoService->setupAgentAccount($rechargeAgent, $userId);
+            } else {
+                $this->agentCryptoService->setupAgentAccount($rechargeAgent, null);
+            }
 
             DB::commit();
 
@@ -200,17 +218,25 @@ class AdminAgentRequestController extends Controller
 
             // If approving, create/update RechargeAgent
             if ($newStatus === 'approved' && $oldStatus !== 'approved') {
+                $userId = $agentRequest->user_id;
+                if (!$userId && $agentRequest->email) {
+                    $userId = User::where('email', $agentRequest->email)->value('id');
+                    if ($userId) {
+                        $agentRequest->update(['user_id' => $userId]);
+                    }
+                }
+
                 $rechargeAgent = RechargeAgent::updateOrCreate(
-                    [
-                        'phone' => $agentRequest->whatsapp,
-                    ],
+                    ['phone' => $agentRequest->whatsapp],
                     [
                         'name' => $agentRequest->name,
                         'phone' => $agentRequest->whatsapp,
                         'status' => 'active',
-                        'description' => $agentRequest->message ?? 'Agent de recharge approuvé',
+                        'description' => $agentRequest->message ?? 'Agent crypto certifié EBETSTREAM',
+                        'user_id' => $userId,
                     ]
                 );
+                $this->agentCryptoService->setupAgentAccount($rechargeAgent, $userId);
             }
 
             DB::commit();

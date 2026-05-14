@@ -13,9 +13,6 @@ use App\Http\Controllers\API\AmbassadorController;
 use App\Http\Controllers\API\TopPlayersController;
 use App\Http\Controllers\API\PartnerController;
 use App\Http\Controllers\API\AdminController;
-use App\Http\Controllers\API\GameCategoryController;
-use App\Http\Controllers\API\GameController;
-use App\Http\Controllers\API\GameMatchController;
 use App\Http\Controllers\API\BetController;
 use App\Http\Controllers\API\CertificationController;
 use App\Http\Controllers\API\EventController;
@@ -34,6 +31,9 @@ use App\Http\Controllers\API\BallonDorController;
 use App\Http\Controllers\API\AdminFederationController;
 use App\Http\Controllers\API\AdminBallonDorController;
 use App\Http\Controllers\API\AdminMonetizationController;
+use App\Http\Controllers\API\DonationController;
+use App\Http\Controllers\API\StreamPredictionController;
+use App\Http\Controllers\API\SponsoredMatchController;
 use App\Http\Controllers\API\TeamMarketplaceController;
 use App\Http\Controllers\API\TournamentController;
 use App\Http\Controllers\API\ChampionshipController;
@@ -253,6 +253,7 @@ Route::post('/reset-password', [AuthController::class, 'resetPassword'])->middle
 
 // Agents de recharge
 Route::get('/recharge-agents', [RechargeAgentController::class, 'index']);
+Route::get('/agent-crypto/agents', [\App\Http\Controllers\API\AgentCryptoController::class, 'publicAgents']);
 
 // Fédérations
 Route::get('/federations', [FederationController::class, 'index']);
@@ -349,20 +350,14 @@ Route::get('/top-players/{id}', [TopPlayersController::class, 'show']);
 Route::get('/partners', [PartnerController::class, 'index']);
 Route::get('/partners/{id}', [PartnerController::class, 'show']);
 
-// Catégories et jeux
-Route::get('/game-categories', [GameCategoryController::class, 'index']);
-Route::get('/game-categories/{id}', [GameCategoryController::class, 'show']);
-Route::get('/games', [GameController::class, 'index']);
-Route::get('/games/{id}', [GameController::class, 'show']);
-
-// Matchs
-Route::get('/game-matches', [GameMatchController::class, 'index']);
-Route::get('/game-matches/{id}', [GameMatchController::class, 'show']);
-
-// Streams (lecture publique)
+// Partenaires
 Route::get('/streams', [StreamController::class, 'index']);
 Route::get('/streams/{id}', [StreamController::class, 'show']);
 Route::get('/streams/{id}/chat', [StreamController::class, 'getChatMessages']);
+Route::get('/streams/{id}/donations', [DonationController::class, 'index']);
+Route::get('/streams/{id}/predictions', [StreamPredictionController::class, 'streamStats']);
+Route::get('/sponsored-matches', [SponsoredMatchController::class, 'index']);
+Route::get('/sponsored-matches/{id}', [SponsoredMatchController::class, 'show']);
 
 // Challenges (lecture publique)
 Route::get('/challenges/live/list', [ChallengeController::class, 'liveChallenges']);
@@ -382,6 +377,14 @@ Route::post('/agent-requests', [AgentRequestController::class, 'store']);
 Route::get('/clans', [ClanController::class, 'index']);
 Route::get('/clans/{id}', [ClanController::class, 'show']);
 
+// EBETSTREAM ARENA
+Route::prefix('arena')->group(function () {
+    Route::get('/stats', [\App\Http\Controllers\API\ArenaController::class, 'stats']);
+    Route::get('/matches', [\App\Http\Controllers\API\ArenaController::class, 'matches']);
+    Route::get('/matches/{id}', [\App\Http\Controllers\API\ArenaController::class, 'show']);
+    Route::get('/leaderboard', [\App\Http\Controllers\API\ArenaController::class, 'leaderboard']);
+});
+
 // Ballon d'Or (lecture publique)
 Route::get('/ballon-dor/current-season', [BallonDorController::class, 'getCurrentSeason']);
 Route::get('/ballon-dor/seasons', [BallonDorController::class, 'getSeasons']);
@@ -392,9 +395,6 @@ Route::get('/ballon-dor/results', [BallonDorController::class, 'getResults']);
 // Team Marketplace (lecture publique)
 Route::get('/team-marketplace', [TeamMarketplaceController::class, 'index']);
 Route::get('/team-marketplace/{id}', [TeamMarketplaceController::class, 'show']);
-
-// Codes de retrait (complétion publique par l'agent)
-Route::post('/withdrawal-codes/{code}/complete', [WithdrawalCodeController::class, 'complete']);
 
 // Tournois (lecture publique)
 Route::get('/tournaments/{id}/teams', [TournamentController::class, 'getTeams']);
@@ -606,8 +606,21 @@ Route::middleware(['auth:sanctum', 'throttle:60,1'])->group(function () {
         Route::delete('/{id}/chat/{messageId}', [StreamController::class, 'deleteChatMessage']);
         Route::post('/{id}/follow', [StreamController::class, 'toggleFollow']);
         Route::post('/{id}/viewers', [StreamController::class, 'updateViewers']);
+        // ── Monetisation Sources A & B ──
+        Route::post('/{id}/donate', [DonationController::class, 'donate']);
+        Route::post('/{id}/predict', [StreamPredictionController::class, 'predict']);
     });
     Route::get('/stream-key', [StreamController::class, 'getStreamKey']);
+
+    // ── Source A : Donations earnings ──
+    Route::get('/my-donations', [DonationController::class, 'myEarnings']);
+
+    // ── Source C : Sponsored matches ──
+    Route::prefix('sponsored-matches')->group(function () {
+        Route::get('/',           [SponsoredMatchController::class, 'index']);
+        Route::post('/',          [SponsoredMatchController::class, 'store']);
+        Route::get('/{id}',       [SponsoredMatchController::class, 'show']);
+    });
 
     // --- Profil ---
     Route::prefix('profile')->group(function () {
@@ -681,6 +694,28 @@ Route::middleware(['auth:sanctum', 'throttle:60,1'])->group(function () {
         Route::post('/', [BetController::class, 'store']);
     });
 
+    // EBETSTREAM ARENA (auth)
+    Route::prefix('arena')->group(function () {
+        Route::get('/profile', [\App\Http\Controllers\API\ArenaController::class, 'profile']);
+        Route::post('/profile', [\App\Http\Controllers\API\ArenaController::class, 'saveProfile']);
+        Route::post('/quick-match', [\App\Http\Controllers\API\ArenaController::class, 'quickMatch']);
+        Route::post('/ranked-match', [\App\Http\Controllers\API\ArenaController::class, 'rankedMatch']);
+        Route::post('/tournament-match', [\App\Http\Controllers\API\ArenaController::class, 'createTournamentMatch']);
+        Route::post('/matches', [\App\Http\Controllers\API\ArenaController::class, 'createPrivateMatch']);
+        Route::post('/matches/{id}/join', [\App\Http\Controllers\API\ArenaController::class, 'joinMatch']);
+        Route::post('/matches/{id}/leave', [\App\Http\Controllers\API\ArenaController::class, 'leaveMatch']);
+    });
+
+    // Agent Crypto EBETSTREAM
+    Route::prefix('agent-crypto')->group(function () {
+        Route::get('/dashboard', [\App\Http\Controllers\API\AgentCryptoController::class, 'dashboard']);
+        Route::post('/crypto-deposit', [\App\Http\Controllers\API\AgentCryptoController::class, 'requestCryptoDeposit']);
+        Route::post('/deposit-to-player', [\App\Http\Controllers\API\AgentCryptoController::class, 'depositToPlayer']);
+        Route::post('/withdrawals/{code}/complete', [\App\Http\Controllers\API\AgentCryptoController::class, 'completeWithdrawal']);
+        Route::get('/transfers', [\App\Http\Controllers\API\AgentCryptoController::class, 'transfers']);
+        Route::post('/rate', [\App\Http\Controllers\API\AgentCryptoController::class, 'rateAgent']);
+    });
+
     // =========================================================================
     // ROUTES ADMIN
     // =========================================================================
@@ -699,28 +734,6 @@ Route::middleware(['auth:sanctum', 'throttle:60,1'])->group(function () {
         Route::delete('/{id}', [PartnerController::class, 'destroy']);
     });
 
-    // Admin - Catégories de jeux
-    Route::prefix('admin/game-categories')->group(function () {
-        Route::get('/', [GameCategoryController::class, 'adminIndex']);
-        Route::post('/', [GameCategoryController::class, 'store']);
-        Route::put('/{id}', [GameCategoryController::class, 'update']);
-        Route::delete('/{id}', [GameCategoryController::class, 'destroy']);
-    });
-
-    // Admin - Jeux
-    Route::prefix('admin/games')->group(function () {
-        Route::post('/', [GameController::class, 'store']);
-        Route::put('/{id}', [GameController::class, 'update']);
-        Route::delete('/{id}', [GameController::class, 'destroy']);
-    });
-
-    // Admin - Matchs
-    Route::prefix('admin/game-matches')->group(function () {
-        Route::post('/', [GameMatchController::class, 'store']);
-        Route::put('/{id}', [GameMatchController::class, 'update']);
-        Route::delete('/{id}', [GameMatchController::class, 'destroy']);
-    });
-
     // Admin - Événements
     Route::prefix('admin/events')->group(function () {
         Route::get('/', [EventController::class, 'index']);
@@ -733,6 +746,7 @@ Route::middleware(['auth:sanctum', 'throttle:60,1'])->group(function () {
     // Admin - Streams
     Route::prefix('admin/streams')->group(function () {
         Route::get('/', [StreamController::class, 'adminIndex']);
+        Route::post('/force-stop-all', [StreamController::class, 'forceStopAll']);
         Route::get('/{id}', [StreamController::class, 'adminShow']);
         Route::put('/{id}', [StreamController::class, 'adminUpdate']);
         Route::delete('/{id}', [StreamController::class, 'adminDestroy']);
@@ -802,6 +816,26 @@ Route::middleware(['auth:sanctum', 'throttle:60,1'])->group(function () {
         Route::post('/agent-tiers', [AdminMonetizationController::class, 'storeAgentTier']);
         Route::put('/agent-tiers/{id}', [AdminMonetizationController::class, 'updateAgentTier']);
         Route::delete('/agent-tiers/{id}', [AdminMonetizationController::class, 'destroyAgentTier']);
+
+        // Source C : distribution prize pool
+        Route::post('/sponsored-matches/{id}/distribute', [SponsoredMatchController::class, 'distribute']);
+    });
+
+    // Admin - EBETSTREAM ARENA
+    Route::prefix('admin/arena')->group(function () {
+        Route::get('/', [\App\Http\Controllers\API\AdminArenaController::class, 'index']);
+        Route::get('/{id}', [\App\Http\Controllers\API\AdminArenaController::class, 'show']);
+        Route::post('/', [\App\Http\Controllers\API\AdminArenaController::class, 'store']);
+        Route::put('/{id}', [\App\Http\Controllers\API\AdminArenaController::class, 'update']);
+        Route::post('/{id}/start', [\App\Http\Controllers\API\AdminArenaController::class, 'startLive']);
+        Route::post('/{id}/result', [\App\Http\Controllers\API\AdminArenaController::class, 'setResult']);
+        Route::post('/{id}/cancel', [\App\Http\Controllers\API\AdminArenaController::class, 'cancel']);
+        Route::delete('/{id}', [\App\Http\Controllers\API\AdminArenaController::class, 'destroy']);
+    });
+
+    Route::prefix('admin/agent-crypto')->group(function () {
+        Route::get('/deposits', [\App\Http\Controllers\API\AgentCryptoController::class, 'adminListDeposits']);
+        Route::post('/deposits/{id}/approve', [\App\Http\Controllers\API\AgentCryptoController::class, 'adminApproveDeposit']);
     });
 
     // Admin - Paris
@@ -883,8 +917,12 @@ Route::middleware(['auth:sanctum', 'throttle:60,1'])->group(function () {
     // Admin - Agents de recharge
     Route::prefix('admin/recharge-agents')->group(function () {
         Route::get('/', [RechargeAgentController::class, 'adminIndex']);
+        Route::get('/{id}', [RechargeAgentController::class, 'adminShow']);
         Route::post('/', [RechargeAgentController::class, 'store']);
         Route::put('/{id}', [RechargeAgentController::class, 'update']);
+        Route::post('/{id}/wallet', [RechargeAgentController::class, 'adjustWallet']);
+        Route::post('/{id}/suspend', [RechargeAgentController::class, 'suspend']);
+        Route::post('/{id}/activate', [RechargeAgentController::class, 'activate']);
         Route::delete('/{id}', [RechargeAgentController::class, 'destroy']);
     });
 

@@ -5,180 +5,140 @@ namespace App\Http\Controllers\API;
 use App\Http\Controllers\Controller;
 use App\Models\WithdrawalCode;
 use App\Models\RechargeAgent;
+use App\Services\AgentCryptoService;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\Validator;
 use Carbon\Carbon;
 
 class WithdrawalCodeController extends Controller
 {
-    /**
-     * Créer un code de retrait
-     */
+    public function __construct(private AgentCryptoService $agentCryptoService) {}
+
     public function store(Request $request)
     {
         $validator = Validator::make($request->all(), [
-            'amount' => 'required|numeric|min:100|max:1000000', // Montant entre 100 et 1M
+            'amount' => 'required|numeric|min:1|max:1000000',
             'recharge_agent_id' => 'required|exists:recharge_agents,id',
         ]);
 
         if ($validator->fails()) {
-            return response()->json([
-                'success' => false,
-                'message' => 'Validation error',
-                'errors' => $validator->errors()
-            ], 422);
+            return response()->json(['success' => false, 'message' => 'Validation error', 'errors' => $validator->errors()], 422);
         }
 
         $user = $request->user();
         if (!$user) {
-            return response()->json([
-                'success' => false,
-                'message' => 'Unauthorized'
-            ], 401);
+            return response()->json(['success' => false, 'message' => 'Unauthorized'], 401);
         }
 
-        // Vérifier que l'agent est actif
         $agent = RechargeAgent::find($request->recharge_agent_id);
         if (!$agent || $agent->status !== 'active') {
-            return response()->json([
-                'success' => false,
-                'message' => 'Selected agent is not available'
-            ], 400);
+            return response()->json(['success' => false, 'message' => 'Agent non disponible'], 400);
         }
 
-        // Générer le code unique
+        $amountEbt = (float) $request->amount;
+
+        try {
+            $this->agentCryptoService->lockPlayerFundsForWithdrawal($user, $amountEbt);
+        } catch (\RuntimeException $e) {
+            return response()->json(['success' => false, 'message' => $e->getMessage()], 400);
+        }
+
         $code = WithdrawalCode::generateUniqueCode();
-        
-        // Créer le code de retrait
+
         $withdrawalCode = WithdrawalCode::create([
             'code' => $code,
-            'amount' => $request->amount,
+            'amount' => $amountEbt,
             'user_id' => $user->id,
             'recharge_agent_id' => $request->recharge_agent_id,
             'status' => 'pending',
-            'expires_at' => Carbon::now()->addHours(24), // Expire dans 24h
+            'expires_at' => Carbon::now()->addHours(24),
         ]);
 
         return response()->json([
             'success' => true,
-            'message' => 'Withdrawal code generated successfully',
+            'message' => 'Code de retrait généré — montant bloqué sur votre compte',
             'data' => [
                 'code' => $withdrawalCode->code,
                 'amount' => $withdrawalCode->amount,
+                'amount_ebt' => $amountEbt,
                 'agent_name' => $agent->name,
                 'agent_phone' => $agent->phone,
+                'agent_id' => $agent->agent_id,
                 'expires_at' => $withdrawalCode->expires_at,
                 'instructions' => [
-                    '1. Contact the agent via WhatsApp: ' . $agent->phone,
-                    '2. Send this withdrawal code: ' . $withdrawalCode->code,
-                    '3. Specify the amount: ' . number_format($withdrawalCode->amount, 2) . ' XAF',
-                    '4. The agent will verify and process your withdrawal',
-                    '5. Code expires in 24 hours'
-                ]
-            ]
+                    '1. Contactez l\'agent : ' . $agent->phone,
+                    '2. Communiquez le code : ' . $withdrawalCode->code,
+                    '3. Montant : ' . number_format($amountEbt, 2) . ' EBT',
+                    '4. L\'agent valide la transaction dans son tableau de bord',
+                    '5. Code valide 24 heures',
+                ],
+            ],
         ], 201);
     }
 
-    /**
-     * Lister les codes de retrait de l'utilisateur
-     */
     public function index(Request $request)
     {
         $user = $request->user();
         if (!$user) {
-            return response()->json([
-                'success' => false,
-                'message' => 'Unauthorized'
-            ], 401);
+            return response()->json(['success' => false, 'message' => 'Unauthorized'], 401);
         }
 
-        $codes = WithdrawalCode::with(['rechargeAgent:id,name,phone'])
+        $codes = WithdrawalCode::with(['rechargeAgent:id,name,phone,agent_id,rating_avg'])
             ->where('user_id', $user->id)
             ->orderBy('created_at', 'desc')
             ->paginate(10);
 
-        return response()->json([
-            'success' => true,
-            'data' => $codes
-        ]);
+        return response()->json(['success' => true, 'data' => $codes]);
     }
 
-    /**
-     * Obtenir les détails d'un code de retrait
-     */
     public function show(Request $request, $code)
     {
-        $user = $request->user();
-        if (!$user) {
-            return response()->json([
-                'success' => false,
-                'message' => 'Unauthorized'
-            ], 401);
-        }
-
         $withdrawalCode = WithdrawalCode::with(['rechargeAgent:id,name,phone', 'user:id,username,email'])
             ->where('code', $code)
             ->firstOrFail();
 
-        return response()->json([
-            'success' => true,
-            'data' => $withdrawalCode
-        ]);
+        return response()->json(['success' => true, 'data' => $withdrawalCode]);
     }
 
-    /**
-     * Marquer un code comme complété (pour les agents)
-     */
     public function complete(Request $request, $code)
     {
-        $validator = Validator::make($request->all(), [
-            'notes' => 'nullable|string|max:500',
-        ]);
-
-        if ($validator->fails()) {
-            return response()->json([
-                'success' => false,
-                'message' => 'Validation error',
-                'errors' => $validator->errors()
-            ], 422);
+        $agent = $this->agentCryptoService->getAgentForUser($request->user());
+        if (!$agent) {
+            return response()->json(['success' => false, 'message' => 'Accès agent requis'], 403);
         }
 
         $withdrawalCode = WithdrawalCode::where('code', $code)
+            ->where('recharge_agent_id', $agent->id)
             ->where('status', 'pending')
             ->firstOrFail();
 
-        // Vérifier que le code n'est pas expiré
         if ($withdrawalCode->expires_at && $withdrawalCode->expires_at->isPast()) {
-            return response()->json([
-                'success' => false,
-                'message' => 'Withdrawal code has expired'
-            ], 400);
+            return response()->json(['success' => false, 'message' => 'Code expiré'], 400);
         }
 
-        $withdrawalCode->update([
-            'status' => 'completed',
-            'completed_at' => now(),
-            'notes' => $request->notes,
-        ]);
+        try {
+            $this->agentCryptoService->completeWithdrawalViaAgent($withdrawalCode, $agent);
+            $withdrawalCode->update([
+                'status' => 'completed',
+                'completed_at' => now(),
+                'notes' => $request->get('notes'),
+            ]);
 
-        return response()->json([
-            'success' => true,
-            'message' => 'Withdrawal completed successfully',
-            'data' => $withdrawalCode->fresh()
-        ]);
+            return response()->json([
+                'success' => true,
+                'message' => 'Retrait complété',
+                'data' => $withdrawalCode->fresh(),
+            ]);
+        } catch (\RuntimeException $e) {
+            return response()->json(['success' => false, 'message' => $e->getMessage()], 400);
+        }
     }
 
-    /**
-     * Annuler un code de retrait
-     */
     public function cancel(Request $request, $code)
     {
         $user = $request->user();
         if (!$user) {
-            return response()->json([
-                'success' => false,
-                'message' => 'Unauthorized'
-            ], 401);
+            return response()->json(['success' => false, 'message' => 'Unauthorized'], 401);
         }
 
         $withdrawalCode = WithdrawalCode::where('code', $code)
@@ -186,126 +146,72 @@ class WithdrawalCodeController extends Controller
             ->where('status', 'pending')
             ->firstOrFail();
 
-        $withdrawalCode->update([
-            'status' => 'cancelled',
-            'notes' => 'Cancelled by user'
-        ]);
+        $this->agentCryptoService->releaseLockedFunds($withdrawalCode);
 
-        return response()->json([
-            'success' => true,
-            'message' => 'Withdrawal code cancelled successfully',
-            'data' => $withdrawalCode->fresh()
-        ]);
+        $withdrawalCode->update(['status' => 'cancelled', 'notes' => 'Annulé par le joueur']);
+
+        return response()->json(['success' => true, 'message' => 'Code annulé — fonds débloqués', 'data' => $withdrawalCode->fresh()]);
     }
 
-    /**
-     * Obtenir les agents actifs pour le retrait
-     */
     public function getActiveAgents()
     {
-        $agents = RechargeAgent::active()->get(['id', 'agent_id', 'name', 'phone', 'description']);
+        $agents = RechargeAgent::active()
+            ->whereNotNull('user_id')
+            ->get(['id', 'agent_id', 'name', 'phone', 'description', 'rating_avg', 'rating_count']);
 
-        return response()->json([
-            'success' => true,
-            'data' => $agents
-        ]);
+        return response()->json(['success' => true, 'data' => $agents]);
     }
 
-    // ========== ADMIN METHODS ==========
-
-    /**
-     * Obtenir tous les codes de retrait (admin)
-     */
     public function adminIndex(Request $request)
     {
         $query = WithdrawalCode::with(['user', 'rechargeAgent']);
 
-        // Filtrage par statut
         if ($request->has('status') && $request->status) {
             $query->where('status', $request->status);
         }
-
-        // Filtrage par agent
         if ($request->has('agent_id') && $request->agent_id) {
             $query->where('recharge_agent_id', $request->agent_id);
         }
 
-        // Filtrage par date
-        if ($request->has('date_from') && $request->date_from) {
-            $query->whereDate('created_at', '>=', $request->date_from);
-        }
-
-        if ($request->has('date_to') && $request->date_to) {
-            $query->whereDate('created_at', '<=', $request->date_to);
-        }
-
         $codes = $query->orderBy('created_at', 'desc')->get();
-
-        // Statistiques
-        $stats = [
-            'total' => WithdrawalCode::count(),
-            'pending' => WithdrawalCode::where('status', 'pending')->count(),
-            'completed' => WithdrawalCode::where('status', 'completed')->count(),
-            'expired' => WithdrawalCode::where('status', 'expired')->count(),
-        ];
 
         return response()->json([
             'success' => true,
             'data' => [
                 'codes' => $codes,
-                'stats' => $stats
-            ]
+                'stats' => [
+                    'total' => WithdrawalCode::count(),
+                    'pending' => WithdrawalCode::where('status', 'pending')->count(),
+                    'completed' => WithdrawalCode::where('status', 'completed')->count(),
+                ],
+            ],
         ]);
     }
 
-    /**
-     * Marquer un code comme complété (admin)
-     */
     public function adminComplete($id)
     {
         $withdrawalCode = WithdrawalCode::findOrFail($id);
-        
         if ($withdrawalCode->status !== 'pending') {
-            return response()->json([
-                'success' => false,
-                'message' => 'Only pending codes can be completed'
-            ], 400);
+            return response()->json(['success' => false, 'message' => 'Code non en attente'], 400);
         }
 
-        $withdrawalCode->status = 'completed';
-        $withdrawalCode->completed_at = now();
-        $withdrawalCode->notes = 'Completed by admin';
-        $withdrawalCode->save();
+        $agent = RechargeAgent::findOrFail($withdrawalCode->recharge_agent_id);
+        $this->agentCryptoService->completeWithdrawalViaAgent($withdrawalCode, $agent);
+        $withdrawalCode->update(['status' => 'completed', 'completed_at' => now(), 'notes' => 'Complété par admin']);
 
-        return response()->json([
-            'success' => true,
-            'message' => 'Withdrawal code marked as completed',
-            'data' => $withdrawalCode->fresh(['user', 'rechargeAgent'])
-        ]);
+        return response()->json(['success' => true, 'data' => $withdrawalCode->fresh(['user', 'rechargeAgent'])]);
     }
 
-    /**
-     * Annuler un code (admin)
-     */
     public function adminCancel($id)
     {
         $withdrawalCode = WithdrawalCode::findOrFail($id);
-        
         if ($withdrawalCode->status !== 'pending') {
-            return response()->json([
-                'success' => false,
-                'message' => 'Only pending codes can be cancelled'
-            ], 400);
+            return response()->json(['success' => false, 'message' => 'Code non en attente'], 400);
         }
 
-        $withdrawalCode->status = 'cancelled';
-        $withdrawalCode->notes = 'Cancelled by admin';
-        $withdrawalCode->save();
+        $this->agentCryptoService->releaseLockedFunds($withdrawalCode);
+        $withdrawalCode->update(['status' => 'cancelled', 'notes' => 'Annulé par admin']);
 
-        return response()->json([
-            'success' => true,
-            'message' => 'Withdrawal code cancelled',
-            'data' => $withdrawalCode->fresh(['user', 'rechargeAgent'])
-        ]);
+        return response()->json(['success' => true, 'data' => $withdrawalCode->fresh(['user', 'rechargeAgent'])]);
     }
 }

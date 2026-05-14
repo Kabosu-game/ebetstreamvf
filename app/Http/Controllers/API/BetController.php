@@ -4,8 +4,8 @@ namespace App\Http\Controllers\API;
 
 use App\Http\Controllers\Controller;
 use App\Models\Bet;
-use App\Models\GameMatch;
 use App\Models\ChampionshipMatch;
+use App\Models\ArenaMatch;
 use App\Models\Wallet;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\Validator;
@@ -20,7 +20,7 @@ class BetController extends Controller
     {
         $user = $request->user();
         
-        $query = Bet::with(['gameMatch.game', 'challenge', 'championshipMatch.championship', 'user'])
+        $query = Bet::with(['challenge', 'championshipMatch.championship', 'arenaMatch', 'user'])
             ->where('user_id', $user->id);
 
         // Filtrer par statut
@@ -49,8 +49,8 @@ class BetController extends Controller
         $user = $request->user();
 
         $validator = Validator::make($request->all(), [
-            'championship_match_id' => 'required_without:game_match_id|exists:championship_matches,id',
-            'game_match_id' => 'required_without:championship_match_id|exists:game_matches,id',
+            'arena_match_id' => 'required_without:championship_match_id|exists:arena_matches,id',
+            'championship_match_id' => 'required_without:arena_match_id|exists:championship_matches,id',
             'bet_type' => 'required|in:team1_win,draw,team2_win,player1_win,player2_win',
             'amount' => 'required|numeric|min:0.01',
         ]);
@@ -71,16 +71,88 @@ class BetController extends Controller
             ], 404);
         }
 
-        // Check if betting on championship match
+        // Check if betting on arena match
+        if ($request->has('arena_match_id')) {
+            return $this->betOnArenaMatch($request, $user, $wallet);
+        }
+
         if ($request->has('championship_match_id')) {
             return $this->betOnChampionshipMatch($request, $user, $wallet);
         }
 
-        // Old game match betting is disabled
         return response()->json([
             'success' => false,
-            'message' => 'Betting on game matches is no longer available. You can now bet on championship matches or challenges instead.'
+            'message' => 'Type de pari non supporté.',
         ], 400);
+    }
+
+    /**
+     * Place a bet on an arena match (ESBS)
+     */
+    private function betOnArenaMatch(Request $request, $user, $wallet)
+    {
+        $match = ArenaMatch::find($request->arena_match_id);
+
+        if (!$match) {
+            return response()->json(['success' => false, 'message' => 'Match not found'], 404);
+        }
+
+        if (!in_array($match->status, ['scheduled', 'live', 'waiting'])) {
+            return response()->json([
+                'success' => false,
+                'message' => 'Les paris ne sont possibles que sur les matchs programmés ou en cours',
+            ], 400);
+        }
+
+        if (!in_array($request->bet_type, ['team1_win', 'team2_win', 'draw'])) {
+            return response()->json(['success' => false, 'message' => 'Type de pari invalide'], 400);
+        }
+
+        $odds = match ($request->bet_type) {
+            'team1_win' => (float) $match->team1_odds,
+            'team2_win' => (float) $match->team2_odds,
+            default => 3.00,
+        };
+
+        if ($odds <= 0) {
+            return response()->json(['success' => false, 'message' => 'Cotes invalides'], 400);
+        }
+
+        $availableBalance = $wallet->balance - $wallet->locked_balance;
+        if ($availableBalance < $request->amount) {
+            return response()->json(['success' => false, 'message' => 'Solde insuffisant'], 400);
+        }
+
+        $potentialWin = $request->amount * $odds;
+
+        DB::beginTransaction();
+        try {
+            $wallet->locked_balance += $request->amount;
+            $wallet->save();
+
+            $bet = Bet::create([
+                'user_id' => $user->id,
+                'arena_match_id' => $match->id,
+                'bet_type' => $request->bet_type,
+                'amount' => $request->amount,
+                'potential_win' => $potentialWin,
+                'status' => 'pending',
+            ]);
+
+            DB::commit();
+
+            return response()->json([
+                'success' => true,
+                'message' => 'Pari Arena placé avec succès (ESBS)',
+                'data' => $bet->load('arenaMatch'),
+            ], 201);
+        } catch (\Exception $e) {
+            DB::rollBack();
+            return response()->json([
+                'success' => false,
+                'message' => 'Erreur: ' . $e->getMessage(),
+            ], 500);
+        }
     }
 
     /**

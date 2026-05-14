@@ -119,13 +119,25 @@ class StreamController extends Controller
     /**
      * Afficher un stream
      */
-    public function show($id)
+    public function show(Request $request, $id)
     {
         $stream = Stream::with(['user', 'sessions', 'followers'])->findOrFail($id);
 
         $data = $stream->toArray();
         $data['thumbnail_url'] = $stream->thumbnail_url;
         $data['ws_urls']       = $this->buildWsUrls($stream);
+
+        // Include follow status for authenticated viewers
+        if ($request->user()) {
+            $userId = $request->user()->id;
+            $data['is_following']  = StreamFollower::where('stream_id', $stream->id)
+                ->where('user_id', $userId)
+                ->exists();
+            $data['is_own_stream'] = $stream->user_id === $userId;
+        } else {
+            $data['is_following']  = false;
+            $data['is_own_stream'] = false;
+        }
 
         return response()->json(['success' => true, 'data' => $data]);
     }
@@ -545,6 +557,24 @@ class StreamController extends Controller
             DB::rollBack();
 
             return response()->json(['success' => false, 'message' => 'Erreur : ' . $e->getMessage()], 500);
+        }
+    }
+
+    public function forceStopAll()
+    {
+        try {
+            $result = \App\Services\LiveBroadcastService::stopAll();
+
+            return response()->json([
+                'success' => true,
+                'message' => "{$result['total']} live(s) arrêté(s)",
+                'data' => $result,
+            ]);
+        } catch (\Exception $e) {
+            return response()->json([
+                'success' => false,
+                'message' => 'Erreur : ' . $e->getMessage(),
+            ], 500);
         }
     }
 

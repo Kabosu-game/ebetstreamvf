@@ -30,10 +30,5 @@ class DatabaseSeeder extends Seeder
         
         // Seed partners
         $this->call(PartnerSeeder::class);
-        
-        // Seed game categories and games
-        $this->call(GameCategorySeeder::class);
-        $this->call(GameSeeder::class);
-        $this->call(GameMatchSeeder::class);
     }
 }

@@ -27,4 +27,7 @@ return Application::configure(basePath: dirname(__DIR__))
                 ], 401);
             }
         });
+    })
+    ->withSchedule(function (\Illuminate\Console\Scheduling\Schedule $schedule): void {
+        $schedule->command('arena:process')->everyMinute();
     })->create();

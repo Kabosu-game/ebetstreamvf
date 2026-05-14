@@ -18,7 +18,7 @@ class AdminBetController extends Controller
      */
     public function index(Request $request)
     {
-        $query = Bet::with(['gameMatch.game', 'user']);
+        $query = Bet::with(['championshipMatch.player1', 'championshipMatch.player2', 'arenaMatch', 'user']);
 
         // Filtrer par statut si fourni
         if ($request->has('status')) {
@@ -28,11 +28,6 @@ class AdminBetController extends Controller
         // Filtrer par utilisateur si fourni
         if ($request->has('user_id')) {
             $query->where('user_id', $request->user_id);
-        }
-
-        // Filtrer par match si fourni
-        if ($request->has('game_match_id')) {
-            $query->where('game_match_id', $request->game_match_id);
         }
 
         $bets = $query->orderBy('created_at', 'desc')
@@ -49,7 +44,7 @@ class AdminBetController extends Controller
      */
     public function show($id)
     {
-        $bet = Bet::with(['gameMatch.game', 'user'])->findOrFail($id);
+        $bet = Bet::with(['championshipMatch.player1', 'championshipMatch.player2', 'arenaMatch', 'user'])->findOrFail($id);
 
         return response()->json([
             'success' => true,
@@ -73,7 +68,7 @@ class AdminBetController extends Controller
             ], 422);
         }
 
-        $bet = Bet::with(['user', 'gameMatch'])->findOrFail($id);
+        $bet = Bet::with(['user', 'championshipMatch', 'arenaMatch'])->findOrFail($id);
         $newStatus = $request->input('status');
 
         // Vérifier que le pari n'est pas déjà terminé
@@ -123,7 +118,6 @@ class AdminBetController extends Controller
                     $transactionData['meta'] = [
                         'bet_id' => $bet->id,
                         'bet_type' => $bet->bet_type,
-                        'game_match_id' => $bet->game_match_id,
                     ];
                 }
                 
